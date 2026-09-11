@@ -2,12 +2,14 @@ from __future__ import annotations
 from typing import Dict, List
 import numpy as np
 
+from .actions import ActionKind
 from .agent import Agent
 from .config import Config
+from .policies import Observation, Policy, RuleBasedPolicy
 
 
 class World:
-    def __init__(self, config: Config, seed: int = 0):
+    def __init__(self, config: Config, seed: int = 0, policy: Policy | None = None):
         self.cfg = config
         self.rng = np.random.default_rng(seed)
         self.seed = seed
@@ -15,6 +17,7 @@ class World:
         self.next_agent_id = 0
         self.total_births = 0
         self.total_deaths = 0
+        self.policy = policy if policy is not None else RuleBasedPolicy(config)
 
         self.capacity = self._make_capacities()
         self.resources = self.capacity.copy()
@@ -76,46 +79,6 @@ class World:
 
     def local_resources(self, agent: Agent) -> np.ndarray:
         return self.resources[:, agent.y, agent.x]
-
-    def choose_action(self, agent: Agent) -> tuple:
-        """
-        Minimal local controller.
-
-        Food is eaten whenever stored food can increase the agent's energy
-        toward the reproductive regime. This is not a fitness maximizer:
-        it is a local homeostatic rule.
-        """
-        # If we have food and are below the energy level at which reproduction
-        # becomes possible, consume it rather than waiting until starvation.
-        if (
-            agent.inventory[0] > 1e-12
-            and agent.energy < self.cfg.reproduce_threshold + self.cfg.child_energy
-        ):
-            return ("eat", 0)
-
-        if (
-            agent.energy >= self.cfg.reproduce_threshold
-            and self.rng.random() < self.cfg.reproduce_probability
-            and len(self.agents) < self.cfg.max_agents
-        ):
-            return ("reproduce", None)
-
-        local = self.local_resources(agent)
-
-        harvest_weights = agent.genotype[:3] * local
-        move_weight = agent.v + self.cfg.move_exploration
-
-        weights = np.concatenate([harvest_weights, [move_weight]])
-        total = weights.sum()
-
-        if total <= 0:
-            return ("move", None)
-
-        probs = weights / total
-        choice = int(self.rng.choice(4, p=probs))
-        if choice < 3:
-            return ("harvest", choice)
-        return ("move", None)
 
     def do_harvest(self, agent: Agent, k: int):
         available = self.resources[k, agent.y, agent.x]
@@ -180,15 +143,31 @@ class World:
             if agent is None:
                 continue
 
-            action, arg = self.choose_action(agent)
+            observation = Observation(
+                energy=agent.energy,
+                inventory=tuple(float(value) for value in agent.inventory),
+                genotype=tuple(float(value) for value in agent.genotype),
+                local_resources=tuple(
+                    float(value) for value in self.local_resources(agent)
+                ),
+                population=len(self.agents),
+            )
+            action = self.policy.choose_action(observation, self.rng)
 
-            if action == "harvest":
-                self.do_harvest(agent, int(arg))
-            elif action == "eat":
+            if action.kind is ActionKind.HARVEST:
+                if action.resource is None:
+                    raise ValueError("harvest actions require a resource index")
+                if not 0 <= action.resource < self.cfg.num_resources:
+                    raise ValueError(
+                        "harvest resource index must be in "
+                        f"[0, {self.cfg.num_resources})"
+                    )
+                self.do_harvest(agent, action.resource)
+            elif action.kind is ActionKind.EAT:
                 self.do_eat(agent)
-            elif action == "move":
+            elif action.kind is ActionKind.MOVE:
                 self.do_move(agent)
-            elif action == "reproduce":
+            elif action.kind is ActionKind.REPRODUCE:
                 self.do_reproduce(agent)
 
             agent.energy -= self.cfg.metabolism

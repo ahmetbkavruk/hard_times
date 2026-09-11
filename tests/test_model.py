@@ -1,7 +1,29 @@
 import unittest
 import numpy as np
 
-from enw import Config, World, Agent
+from ht import Action, ActionKind, Agent, Config, Observation, World
+
+
+class AlwaysMovePolicy:
+    def choose_action(self, observation, rng):
+        return Action(ActionKind.MOVE)
+
+
+class RecordingPolicy:
+    def __init__(self):
+        self.observation = None
+
+    def choose_action(self, observation, rng):
+        self.observation = observation
+        return Action(ActionKind.MOVE)
+
+
+class InvalidHarvestPolicy:
+    def __init__(self, resource):
+        self.resource = resource
+
+    def choose_action(self, observation, rng):
+        return Action(ActionKind.HARVEST, self.resource)
 
 
 class TestEndogenousNicheWorld(unittest.TestCase):
@@ -32,6 +54,49 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         w1.run(100)
         w2.run(100)
         self.assertEqual(w1.history, w2.history)
+
+    def test_policy_can_be_replaced_without_changing_world(self):
+        cfg = Config(L=5, initial_agents=1, metabolism=0.0, move_cost_scale=0.0)
+        world = World(cfg, seed=12, policy=AlwaysMovePolicy())
+        agent = next(iter(world.agents.values()))
+        inventory_before = agent.inventory.copy()
+
+        world.step()
+
+        np.testing.assert_array_equal(agent.inventory, inventory_before)
+        self.assertEqual(agent.age, 1)
+
+    def test_policy_receives_only_read_only_observation_and_rng(self):
+        policy = RecordingPolicy()
+        world = World(Config(L=5, initial_agents=1), seed=13, policy=policy)
+        agent = next(iter(world.agents.values()))
+        expected_energy = agent.energy
+        expected_inventory = tuple(agent.inventory)
+        expected_genotype = tuple(agent.genotype)
+
+        world.step()
+
+        observation = policy.observation
+        self.assertIsInstance(observation, Observation)
+        self.assertEqual(observation.energy, expected_energy)
+        self.assertEqual(observation.inventory, expected_inventory)
+        self.assertEqual(observation.genotype, expected_genotype)
+        self.assertIsInstance(observation.local_resources, tuple)
+        self.assertFalse(hasattr(observation, "do_harvest"))
+        with self.assertRaises(AttributeError):
+            observation.energy = 0.0
+        with self.assertRaises(TypeError):
+            observation.inventory[0] = 0.0
+
+    def test_harvest_resource_index_must_be_in_range(self):
+        cfg = Config(L=5, initial_agents=1)
+        for invalid_index in (-1, cfg.num_resources):
+            with self.subTest(resource=invalid_index):
+                world = World(
+                    cfg, seed=14, policy=InvalidHarvestPolicy(invalid_index)
+                )
+                with self.assertRaisesRegex(ValueError, "resource index"):
+                    world.step()
 
     def test_no_global_fitness_attribute(self):
         cfg = Config(L=10, initial_agents=1)
