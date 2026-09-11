@@ -1,4 +1,4 @@
-# Endogenous Niche World v0.1
+## Hard Times
 
 A minimal evolutionary ecology for studying whether specialization and interdependence can emerge without a global fitness function.
 
