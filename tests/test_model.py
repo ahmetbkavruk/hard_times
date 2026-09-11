@@ -1,7 +1,12 @@
 import unittest
 import numpy as np
 
-from enw import Config, World, Agent
+from ht import Action, ActionKind, Agent, Config, Observation, World
+
+
+class AlwaysMovePolicy:
+    def choose_action(self, agent, observation, rng):
+        return Action(ActionKind.MOVE)
 
 
 class TestEndogenousNicheWorld(unittest.TestCase):
@@ -32,6 +37,21 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         w1.run(100)
         w2.run(100)
         self.assertEqual(w1.history, w2.history)
+
+    def test_policy_can_be_replaced_without_changing_world(self):
+        cfg = Config(L=5, initial_agents=1, metabolism=0.0, move_cost_scale=0.0)
+        world = World(cfg, seed=12, policy=AlwaysMovePolicy())
+        agent = next(iter(world.agents.values()))
+        inventory_before = agent.inventory.copy()
+
+        world.step()
+
+        np.testing.assert_array_equal(agent.inventory, inventory_before)
+        self.assertEqual(agent.age, 1)
+
+    def test_observation_does_not_expose_world_mutation_methods(self):
+        observation = Observation(np.ones(3), population=10)
+        self.assertFalse(hasattr(observation, "do_harvest"))
 
     def test_no_global_fitness_attribute(self):
         cfg = Config(L=10, initial_agents=1)

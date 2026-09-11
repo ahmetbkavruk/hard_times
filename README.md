@@ -18,6 +18,23 @@ v0.1 is the ecological control. It intentionally excludes trade, production, mon
 - Founder lineage and generation tracking
 - Deterministic trajectories for a fixed random seed
 - No `fitness` variable anywhere in the agent state
+- Typed action values and a replaceable policy interface
+
+## Architecture
+
+This first step keeps the existing small package rather than creating many mostly
+empty subpackages. `agent.py` owns persistent individual state, `world.py` owns
+environment state and applies consequences, `actions.py` defines the decisions
+passed between those layers, and `policies.py` chooses decisions from a limited
+observation. This boundary is useful because a learned controller can later replace
+the rule-based policy without gaining permission to mutate the world directly.
+
+The current version is deliberately an **ecological control**, not yet the complete
+first milestone. The next smallest scientific increment is to add one production
+chain and local exchange behind the same action/policy boundary, then compare runs
+with exchange enabled and disabled. Analysis and visualization should become their
+own modules when that increment creates real responsibilities for them; empty
+folders would add navigation without clarity.
 
 ## Governing bookkeeping
 
