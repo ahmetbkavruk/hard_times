@@ -144,14 +144,19 @@ class World:
                 continue
 
             observation = Observation(
-                local_resources=self.local_resources(agent).copy(),
+                energy=agent.energy,
+                inventory=tuple(agent.inventory),
+                genotype=tuple(agent.genotype),
+                local_resources=tuple(self.local_resources(agent)),
                 population=len(self.agents),
             )
-            action = self.policy.choose_action(agent, observation, self.rng)
+            action = self.policy.choose_action(observation, self.rng)
 
             if action.kind is ActionKind.HARVEST:
                 if action.resource is None:
                     raise ValueError("harvest actions require a resource index")
+                if not 0 <= action.resource < self.cfg.num_resources:
+                    raise ValueError(f"invalid harvest resource index: {action.resource}")
                 self.do_harvest(agent, action.resource)
             elif action.kind is ActionKind.EAT:
                 self.do_eat(agent)
