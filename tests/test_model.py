@@ -1,4 +1,6 @@
 import unittest
+from dataclasses import fields
+
 import numpy as np
 
 from ht import Action, ActionKind, Agent, Config, Observation, World
@@ -78,6 +80,10 @@ class TestEndogenousNicheWorld(unittest.TestCase):
 
         observation = policy.observation
         self.assertIsInstance(observation, Observation)
+        self.assertEqual(
+            {field.name for field in fields(observation)},
+            {"energy", "inventory", "genotype", "local_resources", "population"},
+        )
         self.assertEqual(observation.energy, expected_energy)
         self.assertEqual(observation.inventory, expected_inventory)
         self.assertEqual(observation.genotype, expected_genotype)
