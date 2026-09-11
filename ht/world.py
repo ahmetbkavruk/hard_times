@@ -52,7 +52,8 @@ class World:
         return caps
 
     def _random_genotype(self) -> np.ndarray:
-        g = self.rng.gamma(shape=1.0, scale=1.0, size=4)
+        # The developmental budget now covers only A harvesting and movement.
+        g = self.rng.gamma(shape=1.0, scale=1.0, size=2)
         return Agent.normalize_genotype(g, self.cfg.min_trait_norm)
 
     def _spawn_founder(self):
@@ -65,6 +66,9 @@ class World:
             energy=self.cfg.initial_energy,
             inventory=np.zeros(self.cfg.num_resources, dtype=float),
             genotype=self._random_genotype(),
+            production_allocation=float(self.rng.random()),
+            self_produced_inventory=np.zeros(2, dtype=float),
+            received_inventory=np.zeros(2, dtype=float),
             age=0,
             lineage=aid,
             generation=0,
@@ -87,11 +91,29 @@ class World:
         agent.inventory[k] += amount
         agent.energy -= self.cfg.harvest_cost
 
-    def do_eat(self, agent: Agent):
-        q = min(self.cfg.eat_amount, agent.inventory[0])
-        agent.inventory[0] -= q
-        agent.energy += self.cfg.food_energy * q
-        agent.energy -= self.cfg.eat_cost
+    def do_produce(self, agent: Agent):
+        """Produce a fixed total quantity, split between B and C by ``s``."""
+        s = agent.production_allocation
+        amount = self.cfg.production_amount
+        agent.self_produced_inventory[0] += amount * s
+        agent.self_produced_inventory[1] += amount * (1.0 - s)
+        agent.energy -= self.cfg.production_cost
+
+    def do_use(self, agent: Agent):
+        """Use one complete A/B/C recipe, or make no state change at all."""
+        recipe = self.cfg.recipe
+        if any(agent.stock(k) < recipe[k] for k in range(3)):
+            return False
+
+        agent.inventory[0] -= recipe[0]
+        for k in (1, 2):
+            needed = recipe[k]
+            own = min(needed, agent.self_produced_inventory[k - 1])
+            agent.self_produced_inventory[k - 1] -= own
+            agent.received_inventory[k - 1] -= needed - own
+        agent.energy += self.cfg.recipe_energy_gain
+        agent.energy -= self.cfg.use_cost
+        return True
 
     def do_move(self, agent: Agent):
         dx, dy = ((1, 0), (-1, 0), (0, 1), (0, -1))[int(self.rng.integers(4))]
@@ -110,7 +132,7 @@ class World:
             return
         agent.energy -= total_cost
 
-        mutation = self.rng.normal(0.0, self.cfg.mutation_sigma, size=4)
+        mutation = self.rng.normal(0.0, self.cfg.mutation_sigma, size=2)
         child_g = Agent.normalize_genotype(
             agent.genotype + mutation, self.cfg.min_trait_norm
         )
@@ -125,6 +147,12 @@ class World:
             energy=self.cfg.child_energy,
             inventory=np.zeros(self.cfg.num_resources, dtype=float),
             genotype=child_g,
+            production_allocation=Agent.reflect_production_allocation(
+                agent.production_allocation
+                + self.rng.normal(0.0, self.cfg.allocation_mutation_sigma)
+            ),
+            self_produced_inventory=np.zeros(2, dtype=float),
+            received_inventory=np.zeros(2, dtype=float),
             age=0,
             lineage=agent.lineage,
             generation=agent.generation + 1,
@@ -147,6 +175,9 @@ class World:
                 energy=agent.energy,
                 inventory=tuple(agent.inventory),
                 genotype=tuple(agent.genotype),
+                production_allocation=agent.production_allocation,
+                self_produced_inventory=tuple(agent.self_produced_inventory),
+                received_inventory=tuple(agent.received_inventory),
                 local_resources=tuple(self.local_resources(agent)),
                 population=len(self.agents),
             )
@@ -155,11 +186,13 @@ class World:
             if action.kind is ActionKind.HARVEST:
                 if action.resource is None:
                     raise ValueError("harvest actions require a resource index")
-                if not 0 <= action.resource < self.cfg.num_resources:
+                if action.resource != 0:
                     raise ValueError(f"invalid harvest resource index: {action.resource}")
                 self.do_harvest(agent, action.resource)
-            elif action.kind is ActionKind.EAT:
-                self.do_eat(agent)
+            elif action.kind is ActionKind.USE:
+                self.do_use(agent)
+            elif action.kind is ActionKind.PRODUCE:
+                self.do_produce(agent)
             elif action.kind is ActionKind.MOVE:
                 self.do_move(agent)
             elif action.kind is ActionKind.REPRODUCE:
@@ -191,8 +224,8 @@ class World:
             mean_generation = float(np.mean([a.generation for a in self.agents.values()]))
             max_generation = int(max(a.generation for a in self.agents.values()))
         else:
-            mean_g = np.full(4, np.nan)
-            std_g = np.full(4, np.nan)
+            mean_g = np.full(2, np.nan)
+            std_g = np.full(2, np.nan)
             mean_energy = np.nan
             mean_age = np.nan
             lineages = 0
@@ -211,13 +244,15 @@ class World:
                 "mean_generation": mean_generation,
                 "max_generation": max_generation,
                 "mean_hA": float(mean_g[0]),
-                "mean_hB": float(mean_g[1]),
-                "mean_hC": float(mean_g[2]),
-                "mean_v": float(mean_g[3]),
+                "mean_production_allocation": float(np.mean(
+                    [a.production_allocation for a in self.agents.values()]
+                )) if n else np.nan,
+                "mean_v": float(mean_g[1]),
                 "std_hA": float(std_g[0]),
-                "std_hB": float(std_g[1]),
-                "std_hC": float(std_g[2]),
-                "std_v": float(std_g[3]),
+                "std_production_allocation": float(np.std(
+                    [a.production_allocation for a in self.agents.values()]
+                )) if n else np.nan,
+                "std_v": float(std_g[1]),
             }
         )
 
