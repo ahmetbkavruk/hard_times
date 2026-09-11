@@ -5,8 +5,16 @@ from ht import Action, ActionKind, Agent, Config, Observation, World
 
 
 class AlwaysMovePolicy:
-    def choose_action(self, agent, observation, rng):
+    def choose_action(self, observation, rng):
         return Action(ActionKind.MOVE)
+
+
+class InvalidHarvestPolicy:
+    def __init__(self, resource):
+        self.resource = resource
+
+    def choose_action(self, observation, rng):
+        return Action(ActionKind.HARVEST, resource=self.resource)
 
 
 class TestEndogenousNicheWorld(unittest.TestCase):
@@ -49,9 +57,26 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         np.testing.assert_array_equal(agent.inventory, inventory_before)
         self.assertEqual(agent.age, 1)
 
-    def test_observation_does_not_expose_world_mutation_methods(self):
-        observation = Observation(np.ones(3), population=10)
-        self.assertFalse(hasattr(observation, "do_harvest"))
+    def test_observation_is_immutable_policy_input(self):
+        observation = Observation(
+            energy=1.0,
+            inventory=(1.0, 1.0, 1.0),
+            genotype=(1.0, 1.0, 1.0, 1.0),
+            local_resources=(1.0, 1.0, 1.0),
+            population=10,
+        )
+        with self.assertRaises(TypeError):
+            observation.inventory[0] = 0.0
+        with self.assertRaises(AttributeError):
+            observation.energy = 2.0
+
+    def test_invalid_harvest_resource_indices_are_rejected(self):
+        cfg = Config(L=5, initial_agents=1)
+        for resource in (-1, cfg.num_resources):
+            with self.subTest(resource=resource):
+                world = World(cfg, seed=12, policy=InvalidHarvestPolicy(resource))
+                with self.assertRaisesRegex(ValueError, "invalid harvest resource index"):
+                    world.step()
 
     def test_no_global_fitness_attribute(self):
         cfg = Config(L=10, initial_agents=1)
