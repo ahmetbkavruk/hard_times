@@ -1,4 +1,4 @@
-from enw import Config, World
+from ht import Config, World
 
 cfg = Config(
     L=40,
