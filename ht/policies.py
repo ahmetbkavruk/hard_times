@@ -21,6 +21,9 @@ class Observation:
     genotype: tuple[float, ...]
     local_resources: tuple[float, ...]
     population: int
+    production_allocation: float = 0.5
+    self_produced_inventory: tuple[float, float] = (0.0, 0.0)
+    received_inventory: tuple[float, float] = (0.0, 0.0)
 
 
 class Policy(Protocol):
@@ -31,7 +34,7 @@ class Policy(Protocol):
 
 
 class RuleBasedPolicy:
-    """Local homeostatic rules used by the ecological control experiment."""
+    """Local homeostatic rules for production without trade."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -39,11 +42,19 @@ class RuleBasedPolicy:
     def choose_action(self, observation: Observation, rng: Generator) -> Action:
         cfg = self.config
 
-        if (
-            observation.inventory[0] > 1e-12
-            and observation.energy < cfg.reproduce_threshold + cfg.child_energy
-        ):
-            return Action(ActionKind.EAT)
+        bc = np.asarray(observation.self_produced_inventory) + np.asarray(
+            observation.received_inventory
+        )
+        has_recipe = (
+            observation.inventory[0] >= cfg.recipe[0]
+            and bc[0] >= cfg.recipe[1]
+            and bc[1] >= cfg.recipe[2]
+        )
+        if has_recipe and observation.energy < cfg.reproduce_threshold + cfg.child_energy:
+            return Action(ActionKind.USE)
+
+        if (bc[0] < cfg.recipe[1] or bc[1] < cfg.recipe[2]):
+            return Action(ActionKind.PRODUCE)
 
         if (
             observation.energy >= cfg.reproduce_threshold
@@ -54,8 +65,9 @@ class RuleBasedPolicy:
 
         genotype = np.asarray(observation.genotype)
         local_resources = np.asarray(observation.local_resources)
-        harvest_weights = genotype[: cfg.num_resources] * local_resources
-        move_weight = observation.genotype[3] + cfg.move_exploration
+        # B and C are manufactured, so only A participates in harvesting.
+        harvest_weights = genotype[:1] * local_resources[:1]
+        move_weight = observation.genotype[1] + cfg.move_exploration
         weights = np.concatenate([harvest_weights, [move_weight]])
         total = float(weights.sum())
 
@@ -63,6 +75,6 @@ class RuleBasedPolicy:
             return Action(ActionKind.MOVE)
 
         choice = int(rng.choice(len(weights), p=weights / total))
-        if choice < cfg.num_resources:
-            return Action(ActionKind.HARVEST, resource=choice)
+        if choice < 1:
+            return Action(ActionKind.HARVEST, resource=0)
         return Action(ActionKind.MOVE)

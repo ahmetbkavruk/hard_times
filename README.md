@@ -4,15 +4,19 @@ A minimal evolutionary ecology for studying whether specialization and interdepe
 
 ## Scientific role of v0.1
 
-v0.1 is the ecological control. It intentionally excludes trade, production, money, neural networks, and reinforcement learning. Because only resource A currently supplies metabolic energy, ordinary selection should favor A-harvesting ability. If the baseline instead produced stable occupational diversity, that would be suspicious.
+This increment adds individual production without trade. Energy is obtained only by
+atomically using a complete A/B/C recipe; B or C inventory alone has no energetic
+value.
 
 ## Implemented mechanics
 
 - 2D periodic lattice
-- Three renewable, spatially heterogeneous resources A, B, C
-- Agents with heritable genotype `g = (h_A, h_B, h_C, v)`
+- One renewable, spatially heterogeneous environmental resource A
+- Agents with heritable developmental genotype `g = (h_A, v)` and an independent,
+  bounded production allocation `s`
 - Nonnegative unit-norm developmental budget: `||g||_2 = 1`
-- Local movement, harvesting, eating, reproduction, and death
+- Local movement, A harvesting, fixed-capacity B/C production, recipe use,
+  reproduction, and death
 - Energy-conserving reproduction: the parent funds the child's initial energy plus a dissipative reproductive overhead
 - Gaussian mutation followed by clipping and genotype renormalization
 - Founder lineage and generation tracking
@@ -29,18 +33,16 @@ passed between those layers, and `policies.py` chooses decisions from a limited
 observation. This boundary is useful because a learned controller can later replace
 the rule-based policy without gaining permission to mutate the world directly.
 
-The current version is deliberately an **ecological control**, not yet the complete
-first milestone. The next smallest scientific increment is to add one production
-chain and local exchange behind the same action/policy boundary, then compare runs
-with exchange enabled and disabled. Analysis and visualization should become their
-own modules when that increment creates real responsibilities for them; empty
-folders would add navigation without clarity.
+This milestone contains the production-without-trade condition. Local exchange is
+deliberately deferred. Analysis and visualization should become their own modules
+when later increments create real responsibilities for them; empty folders would
+add navigation without clarity.
 
 ## Governing bookkeeping
 
-Only A is edible in this control:
+One complete configured A/B/C recipe supplies energy:
 
-`E(t+1) = E(t) + epsilon_A * consumed_A - metabolism - action_cost`.
+`E(t+1) = E(t) + epsilon_recipe - metabolism - action_cost`.
 
 Agents die when `E <= 0`. Reproductive success is measured retrospectively; it is not assigned as an objective.
 
@@ -48,15 +50,18 @@ Resource regeneration obeys
 
 `R_k(x,t+1) = min(K_k(x), R_k(x,t) + r_k)`.
 
-Harvesting obeys
+Environmental A harvesting obeys
 
-`Delta I_k = min(R_k(x,t), q_max * h_k)`.
+`Delta I_A = min(R_A(x,t), q_max * h_A)`.
 
-## Baseline sanity result
+Each production action creates exactly `production_amount`, divided as
+`B = production_amount * s` and `C = production_amount * (1 - s)`. Self-produced
+and received B/C are stored separately so later exchange mechanics can preserve
+their provenance.
 
-With the default parameters, independent fixed-seed runs show sustained birth/death turnover rather than a frozen founder population or immediate saturation. After 400 steps in two test seeds, populations were about 550 agents, cumulative births about 2,950, cumulative deaths about 2,640, and only about 40-50 of the original 250 founder lineages survived. Mean `h_A` rose to about 0.86, as expected when A is the only resource with direct survival value.
-
-This is a useful negative control: before adding economic interdependence, the system tends toward the one currently valuable capability.
+Because successful recipe use requires A, B, and C, all three inputs are
+survival-relevant in this milestone. B and C are individually produced, but there
+is no exchange or specialization incentive yet.
 
 ## Run
 
@@ -80,4 +85,7 @@ The tests cover genotype normalization, resource carrying capacities, periodic s
 
 ## Next experiment
 
-Add a manufactured good and local exchange, then compare three controlled worlds: ecology only; production without trade; production plus trade. The key question is whether new persistent behavioral/genotypic clusters appear only when agents can become mutually useful to one another.
+Add local exchange, then compare the production-without-trade and
+production-plus-trade conditions. The key question is whether new persistent
+behavioral or genotypic clusters appear only when agents can become mutually useful
+to one another.

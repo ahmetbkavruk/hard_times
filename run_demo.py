@@ -16,8 +16,7 @@ for row in world.history[::100]:
         f"births={row['births']:5d}  "
         f"gen={row['mean_generation']:.1f}/{row['max_generation']:2d}  "
         f"<hA>={row['mean_hA']:.3f}  "
-        f"<hB>={row['mean_hB']:.3f}  "
-        f"<hC>={row['mean_hC']:.3f}  "
+        f"<s>={row['mean_production_allocation']:.3f}  "
         f"<v>={row['mean_v']:.3f}"
     )
 

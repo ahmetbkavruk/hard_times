@@ -15,8 +15,7 @@ def main():
     print(
         "mean traits : "
         f"hA={final['mean_hA']:.3f}, "
-        f"hB={final['mean_hB']:.3f}, "
-        f"hC={final['mean_hC']:.3f}, "
+        f"s={final['mean_production_allocation']:.3f}, "
         f"v={final['mean_v']:.3f}"
     )
 

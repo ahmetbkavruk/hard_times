@@ -9,8 +9,9 @@ from enum import Enum
 class ActionKind(str, Enum):
     """The small action vocabulary supported by the baseline world."""
 
-    EAT = "eat"
+    USE = "use"
     HARVEST = "harvest"
+    PRODUCE = "produce"
     MOVE = "move"
     REPRODUCE = "reproduce"
 
@@ -21,4 +22,3 @@ class Action:
 
     kind: ActionKind
     resource: int | None = None
-
