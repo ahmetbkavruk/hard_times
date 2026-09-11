@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+enw/
+
+# Testing / tooling
+.pytest_cache/
+.mypy_cache/
+
+# IDE settings
+.vscode/
+
+# Generated simulation output
+results/
+
+# OS junk
+.DS_Store
+Thumbs.db
