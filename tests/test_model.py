@@ -242,6 +242,16 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         self.assertGreater(final["deaths"], 0)
         self.assertGreater(final["max_generation"], 0)
 
+    def test_history_records_manufactured_inventory_totals(self):
+        cfg, world, agent = self._single_agent_world()
+        agent.self_produced_inventory[:] = (1.25, 2.5)
+        agent.received_inventory[:] = (0.75, 0.5)
+
+        world.record_metrics()
+
+        self.assertEqual(world.history[-1]["total_B_stock"], 2.0)
+        self.assertEqual(world.history[-1]["total_C_stock"], 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()

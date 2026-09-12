@@ -34,9 +34,8 @@ observation. This boundary is useful because a learned controller can later repl
 the rule-based policy without gaining permission to mutate the world directly.
 
 This milestone contains the production-without-trade condition. Local exchange is
-deliberately deferred. Analysis and visualization should become their own modules
-when later increments create real responsibilities for them; empty folders would
-add navigation without clarity.
+deliberately deferred. The baseline's read-only plotting helpers live beside the
+experiment runner so visualization remains separate from simulation mechanics.
 
 ## Governing bookkeeping
 
@@ -69,11 +68,23 @@ is no exchange or specialization incentive yet.
 python run_demo.py
 ```
 
-or run the baseline experiment and write a CSV:
+or run the baseline experiment and write its raw CSV plus deterministic, seed-named
+figures under `results/figures/`:
 
 ```bash
 python experiments/baseline.py
 ```
+
+The seed, duration, and output directory can be selected explicitly:
+
+```bash
+python experiments/baseline.py --seed 7 --steps 600 --results-dir results
+```
+
+The figures cover population and cumulative demographic events, mean energy,
+ecological traits, production-allocation dynamics and selected histograms, and
+aggregate B/C inventories. Allocation snapshots are retained only at initialization,
+one-third and two-thirds of the requested duration, and the final simulated step.
 
 ## Tests
 
