@@ -223,6 +223,8 @@ class World:
             lineages = len({a.lineage for a in self.agents.values()})
             mean_generation = float(np.mean([a.generation for a in self.agents.values()]))
             max_generation = int(max(a.generation for a in self.agents.values()))
+            total_b_stock = float(sum(a.stock(1) for a in self.agents.values()))
+            total_c_stock = float(sum(a.stock(2) for a in self.agents.values()))
         else:
             mean_g = np.full(2, np.nan)
             std_g = np.full(2, np.nan)
@@ -231,6 +233,8 @@ class World:
             lineages = 0
             mean_generation = np.nan
             max_generation = 0
+            total_b_stock = 0.0
+            total_c_stock = 0.0
 
         self.history.append(
             {
@@ -253,6 +257,8 @@ class World:
                     [a.production_allocation for a in self.agents.values()]
                 )) if n else np.nan,
                 "std_v": float(std_g[1]),
+                "total_B_stock": total_b_stock,
+                "total_C_stock": total_c_stock,
             }
         )
 
