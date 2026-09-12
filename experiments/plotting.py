@@ -1,4 +1,4 @@
-"""Small, read-only plotting helpers for the no-trade baseline experiment."""
+"""Read-only plots for either explicitly configured experiment condition."""
 
 from pathlib import Path
 
@@ -18,8 +18,8 @@ def _save(fig, output_dir: Path, filename: str):
     plt.close(fig)
 
 
-def plot_baseline(history, allocation_snapshots, seed: int, output_dir: Path):
-    """Write baseline figures without changing the world or its agents."""
+def plot_run(history, allocation_snapshots, seed: int, output_dir: Path):
+    """Write figures without changing the world or its agents."""
     output_dir.mkdir(parents=True, exist_ok=True)
     time = _series(history, "t")
 
@@ -97,3 +97,21 @@ def plot_baseline(history, allocation_snapshots, seed: int, output_dir: Path):
     ax.set(xlabel="Timestep", ylabel="Inventory", title="Manufactured inventories")
     ax.legend()
     _save(fig, output_dir, f"manufactured_inventories_seed_{seed}.png")
+
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 7))
+    axes[0].plot(time, _series(history, "cumulative_trade_events"), label="Trades")
+    axes[0].plot(
+        time, _series(history, "cumulative_recipe_uses_with_received_stock"),
+        label="Recipe uses containing receipts",
+    )
+    axes[0].set(ylabel="Cumulative events", title="Exchange and use of received goods")
+    axes[0].legend()
+    for quantity, label in (("gross", "Surrendered"), ("received", "Received"), ("loss", "Lost")):
+        amounts = [
+            row[f"cumulative_trade_{quantity}_B"] + row[f"cumulative_trade_{quantity}_C"]
+            for row in history
+        ]
+        axes[1].plot(time, amounts, label=label)
+    axes[1].set(xlabel="Timestep", ylabel="Cumulative B + C units")
+    axes[1].legend()
+    _save(fig, output_dir, f"trade_activity_seed_{seed}.png")

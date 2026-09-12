@@ -1,12 +1,17 @@
 import unittest
 import numpy as np
 
-from ht import Action, ActionKind, Agent, Config, Observation, World
+from ht import Action, ActionKind, Agent, Config, Observation, RuleBasedPolicy, World
 
 
 class AlwaysMovePolicy:
     def choose_action(self, observation, rng):
         return Action(ActionKind.MOVE)
+
+
+class AlwaysProducePolicy:
+    def choose_action(self, observation, rng):
+        return Action(ActionKind.PRODUCE)
 
 
 class InvalidHarvestPolicy:
@@ -145,6 +150,78 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         produced = agent.self_produced_inventory - before
         self.assertEqual(float(produced.sum()), cfg.production_amount)
 
+    def test_nonlinear_production_keeps_endpoints_and_reduces_mixed_output(self):
+        cases = (
+            (0.0, (0.0, 1.0)),
+            (0.25, (0.0625, 0.5625)),
+            (0.5, (0.25, 0.25)),
+            (1.0, (1.0, 0.0)),
+        )
+        for allocation, expected in cases:
+            with self.subTest(allocation=allocation):
+                cfg, world, agent = self._single_agent_world(
+                    production_specialization_exponent=2.0
+                )
+                agent.production_allocation = allocation
+                agent.received_inventory[:] = (0.2, 0.3)
+                before_energy = agent.energy
+                world.do_produce(agent)
+                np.testing.assert_allclose(agent.self_produced_inventory, expected)
+                np.testing.assert_array_equal(agent.received_inventory, (0.2, 0.3))
+                self.assertAlmostEqual(before_energy - agent.energy, cfg.production_cost)
+
+    def test_production_accepts_fractional_gamma(self):
+        _, world, agent = self._single_agent_world(production_specialization_exponent=1.5)
+        agent.production_allocation = 0.5
+        world.do_produce(agent)
+        np.testing.assert_allclose(agent.self_produced_inventory, (2**-1.5, 2**-1.5))
+
+    def test_production_and_exploration_configuration_bounds(self):
+        for gamma in (0.0, 0.99, np.nan, np.inf, -np.inf):
+            with self.subTest(gamma=gamma), self.assertRaises(ValueError):
+                Config(production_specialization_exponent=gamma)
+        for probability in (-0.1, 1.1, np.nan, np.inf):
+            with self.subTest(probability=probability), self.assertRaises(ValueError):
+                Config(deficit_move_probability=probability)
+
+    def test_deficient_agents_can_explore_in_both_trade_conditions(self):
+        for trade_enabled in (False, True):
+            for allocation in (0.0, 0.5, 1.0):
+                observation = Observation(
+                    energy=12.0, inventory=(0.0,), genotype=(1.0, 0.0),
+                    local_resources=(8.0,), population=1,
+                    production_allocation=allocation,
+                )
+                policy = RuleBasedPolicy(Config(
+                    trade_enabled=trade_enabled, deficit_move_probability=1.0
+                ))
+                self.assertEqual(
+                    policy.choose_action(observation, np.random.default_rng(7)).kind,
+                    ActionKind.MOVE,
+                )
+
+    def test_zero_deficit_exploration_preserves_production_and_rng_state(self):
+        observation = Observation(
+            energy=12.0, inventory=(0.0,), genotype=(1.0, 0.0),
+            local_resources=(8.0,), population=1,
+        )
+        rng = np.random.default_rng(7)
+        expected_rng = np.random.default_rng(7)
+        policy = RuleBasedPolicy(Config(deficit_move_probability=0.0))
+        self.assertEqual(policy.choose_action(observation, rng).kind, ActionKind.PRODUCE)
+        self.assertEqual(rng.random(), expected_rng.random())
+
+    def test_recipe_use_takes_priority_over_exploration(self):
+        observation = Observation(
+            energy=4.0, inventory=(1.0,), genotype=(1.0, 0.0),
+            local_resources=(8.0,), population=1,
+            self_produced_inventory=(0.5, 0.0), received_inventory=(0.0, 0.5),
+        )
+        policy = RuleBasedPolicy(Config(deficit_move_probability=1.0))
+        self.assertEqual(
+            policy.choose_action(observation, np.random.default_rng(7)).kind, ActionKind.USE
+        )
+
     def test_bc_inventory_alone_provides_no_energy(self):
         cfg, world, agent = self._single_agent_world()
         agent.inventory[0] = 0.0
@@ -270,6 +347,48 @@ class TestEndogenousNicheWorld(unittest.TestCase):
 
         self.assertEqual(world.history[-1]["total_B_stock"], 2.0)
         self.assertEqual(world.history[-1]["total_C_stock"], 3.0)
+
+    def test_recipe_metrics_count_actual_receipt_consumption_only(self):
+        _, world, agent = self._single_agent_world()
+        agent.self_produced_inventory[:] = (0.25, 0.5)
+        agent.received_inventory[:] = (0.25, 0.0)
+        before = world.usage_totals.copy()
+        self.assertFalse(world.do_use(agent))  # A is missing.
+        self.assertEqual(world.usage_totals, before)
+        agent.inventory[0] = 2.0
+        self.assertTrue(world.do_use(agent))
+        agent.self_produced_inventory[:] = (0.5, 0.5)
+        self.assertTrue(world.do_use(agent))
+        world.record_metrics()
+        final = world.history[-1]
+        self.assertEqual(final["cumulative_recipe_uses"], 2)
+        self.assertEqual(final["cumulative_recipe_uses_with_received_stock"], 1)
+        self.assertEqual(final["cumulative_received_B_used"], 0.25)
+        self.assertEqual(final["cumulative_received_C_used"], 0.0)
+
+    def test_exchange_follows_death_removal_and_precedes_metrics(self):
+        cfg = Config(
+            initial_agents=3, production_amount=0.0, production_cost=0.0,
+            metabolism=0.2, trade_efficiency=0.75,
+        )
+        world = World(cfg, seed=7, policy=AlwaysProducePolicy())
+        first, second, doomed = world.agents.values()
+        for agent in (first, second, doomed):
+            agent.x = agent.y = 0
+        self._make_complementary(cfg, first, second)
+        doomed.energy = 0.1
+        world.step()
+        self.assertNotIn(doomed.id, world.agents)
+        self.assertEqual(set(world.trades[0]["partner_ids"]), {first.id, second.id})
+        self.assertEqual(world.trades[0]["t"], 1)
+        self.assertEqual(world.history[-1]["cumulative_trade_events"], 1)
+        for good in ("B", "C"):
+            self.assertAlmostEqual(world.history[-1][f"cumulative_trade_gross_{good}"], 2 / 3)
+            self.assertAlmostEqual(world.history[-1][f"cumulative_trade_received_{good}"], 0.5)
+            self.assertAlmostEqual(world.history[-1][f"cumulative_trade_loss_{good}"], 1 / 6)
+        before = world.history[-1].copy()
+        world.record_metrics()
+        self.assertEqual(world.history[-1], before)
 
     def test_no_colocation_means_no_trade(self):
         cfg, world, agents = self._trade_world()

@@ -28,6 +28,21 @@ class World:
 
         self.history: List[dict] = []
         self.trades: List[dict] = []
+        self.trade_totals = {
+            "trade_events": 0,
+            "trade_gross_B": 0.0,
+            "trade_gross_C": 0.0,
+            "trade_received_B": 0.0,
+            "trade_received_C": 0.0,
+            "trade_loss_B": 0.0,
+            "trade_loss_C": 0.0,
+        }
+        self.usage_totals = {
+            "recipe_uses": 0,
+            "recipe_uses_with_received_stock": 0,
+            "received_B_used": 0.0,
+            "received_C_used": 0.0,
+        }
         self.record_metrics()
 
     def _make_capacities(self) -> np.ndarray:
@@ -93,11 +108,12 @@ class World:
         agent.energy -= self.cfg.harvest_cost
 
     def do_produce(self, agent: Agent):
-        """Produce a fixed total quantity, split between B and C by ``s``."""
+        """Allocate fixed effort; output is linear only when gamma is one."""
         s = agent.production_allocation
         amount = self.cfg.production_amount
-        agent.self_produced_inventory[0] += amount * s
-        agent.self_produced_inventory[1] += amount * (1.0 - s)
+        gamma = self.cfg.production_specialization_exponent
+        agent.self_produced_inventory[0] += amount * s**gamma
+        agent.self_produced_inventory[1] += amount * (1.0 - s)**gamma
         agent.energy -= self.cfg.production_cost
 
     def do_use(self, agent: Agent):
@@ -107,13 +123,19 @@ class World:
             return False
 
         agent.inventory[0] -= recipe[0]
-        for k in (1, 2):
+        used_received_stock = False
+        for k, good in ((1, "B"), (2, "C")):
             needed = recipe[k]
             own = min(needed, agent.self_produced_inventory[k - 1])
             agent.self_produced_inventory[k - 1] -= own
-            agent.received_inventory[k - 1] -= needed - own
+            received = needed - own
+            agent.received_inventory[k - 1] -= received
+            self.usage_totals[f"received_{good}_used"] += received
+            used_received_stock = used_received_stock or received > 0.0
         agent.energy += self.cfg.recipe_energy_gain
         agent.energy -= self.cfg.use_cost
+        self.usage_totals["recipe_uses"] += 1
+        self.usage_totals["recipe_uses_with_received_stock"] += int(used_received_stock)
         return True
 
     def do_move(self, agent: Agent):
@@ -229,6 +251,11 @@ class World:
                 "transaction_loss": {"B": loss, "C": loss},
             }
         )
+        self.trade_totals["trade_events"] += 1
+        for good in ("B", "C"):
+            self.trade_totals[f"trade_gross_{good}"] += q
+            self.trade_totals[f"trade_received_{good}"] += net
+            self.trade_totals[f"trade_loss_{good}"] += loss
         return True
 
     def step(self):
@@ -286,6 +313,7 @@ class World:
 
         if n:
             G = np.stack([a.genotype for a in self.agents.values()])
+            allocations = np.array([a.production_allocation for a in self.agents.values()])
             energies = np.array([a.energy for a in self.agents.values()], dtype=float)
             ages = np.array([a.age for a in self.agents.values()], dtype=float)
             mean_g = G.mean(axis=0)
@@ -320,17 +348,18 @@ class World:
                 "mean_generation": mean_generation,
                 "max_generation": max_generation,
                 "mean_hA": float(mean_g[0]),
-                "mean_production_allocation": float(np.mean(
-                    [a.production_allocation for a in self.agents.values()]
-                )) if n else np.nan,
+                "mean_production_allocation": float(allocations.mean()) if n else np.nan,
+                # Descriptive endpoint bias, not a measure of dependence on trade.
+                "mean_specialization": float(np.mean(np.abs(2 * allocations - 1)))
+                if n else np.nan,
                 "mean_v": float(mean_g[1]),
                 "std_hA": float(std_g[0]),
-                "std_production_allocation": float(np.std(
-                    [a.production_allocation for a in self.agents.values()]
-                )) if n else np.nan,
+                "std_production_allocation": float(allocations.std()) if n else np.nan,
                 "std_v": float(std_g[1]),
                 "total_B_stock": total_b_stock,
                 "total_C_stock": total_c_stock,
+                **{f"cumulative_{key}": value for key, value in self.trade_totals.items()},
+                **{f"cumulative_{key}": value for key, value in self.usage_totals.items()},
             }
         )
 

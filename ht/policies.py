@@ -34,7 +34,7 @@ class Policy(Protocol):
 
 
 class RuleBasedPolicy:
-    """Local homeostatic rules for production without trade."""
+    """Local homeostatic rules shared by trade and no-trade conditions."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -53,7 +53,15 @@ class RuleBasedPolicy:
         if has_recipe and observation.energy < cfg.reproduce_threshold + cfg.child_energy:
             return Action(ActionKind.USE)
 
-        if (bc[0] < cfg.recipe[1] or bc[1] < cfg.recipe[2]):
+        if bc[0] < cfg.recipe[1] or bc[1] < cfg.recipe[2]:
+            # A specialist cannot manufacture its missing good at an endpoint.
+            # Permit exploration without observing partners or granting trade
+            # experiments a different controller. Zero restores the old rule.
+            if (
+                cfg.deficit_move_probability > 0.0
+                and rng.random() < cfg.deficit_move_probability
+            ):
+                return Action(ActionKind.MOVE)
             return Action(ActionKind.PRODUCE)
 
         if (

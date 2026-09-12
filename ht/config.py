@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import isfinite
 
 @dataclass(frozen=True)
 class Config:
@@ -18,6 +19,7 @@ class Config:
     recipe: tuple[float, float, float] = (1.0, 0.5, 0.5)
     production_amount: float = 1.0
     production_cost: float = 0.08
+    production_specialization_exponent: float = 1.0
 
     trade_enabled: bool = True
     trade_efficiency: float = 1.0
@@ -38,10 +40,20 @@ class Config:
     hungry_energy: float = 8.0
     reproduce_probability: float = 0.12
     move_exploration: float = 0.12
+    # Chance to move instead of repeatedly producing while B or C is missing.
+    # This policy parameter applies in both trade and no-trade experiments.
+    deficit_move_probability: float = 0.12
 
     min_trait_norm: float = 1e-12
 
     def __post_init__(self) -> None:
+        if not (
+            isfinite(self.production_specialization_exponent)
+            and self.production_specialization_exponent >= 1.0
+        ):
+            raise ValueError("production_specialization_exponent must be finite and >= 1")
+        if not 0.0 <= self.deficit_move_probability <= 1.0:
+            raise ValueError("deficit_move_probability must be between 0 and 1")
         if not (0.0 < self.trade_efficiency <= 1.0):
             raise ValueError("trade_efficiency must satisfy 0 < trade_efficiency <= 1")
         if not self.max_trade_per_pair >= 0.0:
