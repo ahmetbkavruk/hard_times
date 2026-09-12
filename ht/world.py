@@ -27,6 +27,7 @@ class World:
             self._spawn_founder()
 
         self.history: List[dict] = []
+        self.trades: List[dict] = []
         self.record_metrics()
 
     def _make_capacities(self) -> np.ndarray:
@@ -160,6 +161,76 @@ class World:
         self.agents[aid] = child
         self.total_births += 1
 
+    def exchange(self) -> None:
+        """Pair co-located survivors and make reciprocal B/C exchanges."""
+        if not self.cfg.trade_enabled:
+            return
+
+        occupancy: Dict[tuple[int, int], List[Agent]] = {}
+        for agent in self.agents.values():
+            occupancy.setdefault((agent.x, agent.y), []).append(agent)
+
+        for cell, occupants in occupancy.items():
+            self.rng.shuffle(occupants)
+            for pair_start in range(0, len(occupants) - 1, 2):
+                first, second = occupants[pair_start : pair_start + 2]
+                self._exchange_pair(first, second, cell)
+
+    def _exchange_pair(
+        self, first: Agent, second: Agent, cell: tuple[int, int]
+    ) -> bool:
+        """Exchange B from one partner for C from the other, if complementary."""
+        recipe_b, recipe_c = self.cfg.recipe[1:]
+
+        def quantities(b_donor: Agent, c_donor: Agent) -> float:
+            export_b = max(0.0, b_donor.self_produced_inventory[0] - recipe_b)
+            export_c = max(0.0, c_donor.self_produced_inventory[1] - recipe_c)
+            need_c = max(0.0, recipe_c - b_donor.stock(2))
+            need_b = max(0.0, recipe_b - c_donor.stock(1))
+            return min(
+                export_b,
+                export_c,
+                need_c / self.cfg.trade_efficiency,
+                need_b / self.cfg.trade_efficiency,
+                self.cfg.max_trade_per_pair,
+            )
+
+        q = quantities(first, second)
+        if q > 0.0:
+            b_donor, c_donor = first, second
+        else:
+            q = quantities(second, first)
+            if q <= 0.0:
+                return False
+            b_donor, c_donor = second, first
+
+        net = self.cfg.trade_efficiency * q
+        loss = (1.0 - self.cfg.trade_efficiency) * q
+        # All limits have been established before either partner is mutated.
+        # Debiting only self-produced stock also prevents receipt re-export.
+        b_donor.self_produced_inventory[0] -= q
+        c_donor.self_produced_inventory[1] -= q
+        b_donor.received_inventory[1] += net
+        c_donor.received_inventory[0] += net
+
+        self.trades.append(
+            {
+                "t": self.t,
+                "cell": cell,
+                "partner_ids": (first.id, second.id),
+                "surrendered": {
+                    b_donor.id: {"good": "B", "gross": q},
+                    c_donor.id: {"good": "C", "gross": q},
+                },
+                "received": {
+                    b_donor.id: {"good": "C", "net": net},
+                    c_donor.id: {"good": "B", "net": net},
+                },
+                "transaction_loss": {"B": loss, "C": loss},
+            }
+        )
+        return True
+
     def step(self):
         self.regenerate_resources()
 
@@ -207,6 +278,7 @@ class World:
         self.total_deaths += len(dead)
 
         self.t += 1
+        self.exchange()
         self.record_metrics()
 
     def record_metrics(self):

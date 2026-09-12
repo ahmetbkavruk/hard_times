@@ -19,6 +19,10 @@ class Config:
     production_amount: float = 1.0
     production_cost: float = 0.08
 
+    trade_enabled: bool = True
+    trade_efficiency: float = 1.0
+    max_trade_per_pair: float = 1.0
+
     initial_energy: float = 12.0
     metabolism: float = 0.28
     move_cost_scale: float = 0.20
@@ -36,3 +40,9 @@ class Config:
     move_exploration: float = 0.12
 
     min_trait_norm: float = 1e-12
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.trade_efficiency <= 1.0):
+            raise ValueError("trade_efficiency must satisfy 0 < trade_efficiency <= 1")
+        if not self.max_trade_per_pair >= 0.0:
+            raise ValueError("max_trade_per_pair must be nonnegative")

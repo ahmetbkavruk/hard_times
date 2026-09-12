@@ -23,6 +23,25 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         world = World(cfg, seed=7)
         return cfg, world, next(iter(world.agents.values()))
 
+    def _trade_world(self, efficiency=1.0, maximum=10.0, agents=2, seed=7):
+        cfg = Config(
+            L=4,
+            initial_agents=agents,
+            trade_efficiency=efficiency,
+            max_trade_per_pair=maximum,
+        )
+        world = World(cfg, seed=seed)
+        traders = list(world.agents.values())
+        for trader in traders:
+            trader.x = trader.y = 0
+            trader.self_produced_inventory[:] = 0.0
+            trader.received_inventory[:] = 0.0
+        return cfg, world, traders
+
+    def _make_complementary(self, cfg, b_donor, c_donor, surplus=1.0):
+        b_donor.self_produced_inventory[:] = (cfg.recipe[1] + surplus, 0.0)
+        c_donor.self_produced_inventory[:] = (0.0, cfg.recipe[2] + surplus)
+
     def test_genotype_normalization(self):
         g = Agent.normalize_genotype(np.array([1.0, 2.0, 3.0, 4.0]))
         self.assertAlmostEqual(np.linalg.norm(g), 1.0, places=12)
@@ -251,6 +270,112 @@ class TestEndogenousNicheWorld(unittest.TestCase):
 
         self.assertEqual(world.history[-1]["total_B_stock"], 2.0)
         self.assertEqual(world.history[-1]["total_C_stock"], 3.0)
+
+    def test_no_colocation_means_no_trade(self):
+        cfg, world, agents = self._trade_world()
+        self._make_complementary(cfg, *agents)
+        agents[1].x = 1
+        before = [a.self_produced_inventory.copy() for a in agents]
+        world.exchange()
+        self.assertEqual(world.trades, [])
+        for agent, stock in zip(agents, before):
+            np.testing.assert_array_equal(agent.self_produced_inventory, stock)
+
+    def test_trade_configuration_bounds_are_required(self):
+        for efficiency in (0.0, -0.1, 1.1, np.nan):
+            with self.subTest(efficiency=efficiency):
+                with self.assertRaises(ValueError):
+                    Config(trade_efficiency=efficiency)
+        for maximum in (-0.1, np.nan):
+            with self.subTest(maximum=maximum):
+                with self.assertRaises(ValueError):
+                    Config(max_trade_per_pair=maximum)
+
+    def test_complementary_colocation_trades_exactly(self):
+        cfg, world, agents = self._trade_world()
+        self._make_complementary(cfg, *agents, surplus=0.4)
+        world.exchange()
+        np.testing.assert_allclose(agents[0].self_produced_inventory, (0.5, 0.0))
+        np.testing.assert_allclose(agents[1].self_produced_inventory, (0.0, 0.5))
+        np.testing.assert_allclose(agents[0].received_inventory, (0.0, 0.4))
+        np.testing.assert_allclose(agents[1].received_inventory, (0.4, 0.0))
+        self.assertEqual(len(world.trades), 1)
+
+    def test_same_sided_producers_do_not_trade(self):
+        cfg, world, agents = self._trade_world()
+        for agent in agents:
+            agent.self_produced_inventory[0] = cfg.recipe[1] + 1.0
+        world.exchange()
+        self.assertEqual(world.trades, [])
+
+    def test_trade_cap_applies_in_both_directions(self):
+        cfg, world, agents = self._trade_world(maximum=0.2)
+        self._make_complementary(cfg, *agents)
+        world.exchange()
+        event = world.trades[0]
+        self.assertEqual({v["gross"] for v in event["surrendered"].values()}, {0.2})
+
+    def test_trade_efficiency_controls_receipts_and_loss(self):
+        cfg, world, agents = self._trade_world(efficiency=0.5)
+        self._make_complementary(cfg, *agents)
+        world.exchange()
+        np.testing.assert_allclose(agents[0].received_inventory, (0.0, 0.5))
+        np.testing.assert_allclose(agents[1].received_inventory, (0.5, 0.0))
+        self.assertEqual(world.trades[0]["transaction_loss"], {"B": 0.5, "C": 0.5})
+
+    def test_odd_population_leaves_one_agent_unpaired(self):
+        cfg, world, agents = self._trade_world(agents=3)
+        self._make_complementary(cfg, agents[0], agents[1])
+        agents[2].self_produced_inventory[0] = cfg.recipe[1] + 1.0
+        world.exchange()
+        paired = set(world.trades[0]["partner_ids"])
+        self.assertEqual(len(paired), 2)
+        self.assertEqual(len(set(world.agents) - paired), 1)
+
+    def test_agent_has_at_most_one_trade_per_timestep(self):
+        cfg, world, agents = self._trade_world(agents=4)
+        self._make_complementary(cfg, agents[0], agents[1])
+        self._make_complementary(cfg, agents[2], agents[3])
+        world.exchange()
+        participant_ids = [aid for event in world.trades for aid in event["partner_ids"]]
+        self.assertEqual(len(participant_ids), len(set(participant_ids)))
+
+    def test_disabled_trade_changes_nothing(self):
+        cfg = Config(L=4, initial_agents=2, trade_enabled=False)
+        world = World(cfg, seed=7)
+        agents = list(world.agents.values())
+        for agent in agents:
+            agent.x = agent.y = 0
+        self._make_complementary(cfg, *agents)
+        before = [a.self_produced_inventory.copy() for a in agents]
+        world.exchange()
+        self.assertEqual(world.trades, [])
+        for agent, stock in zip(agents, before):
+            np.testing.assert_array_equal(agent.self_produced_inventory, stock)
+
+    def test_received_inventory_cannot_be_reexported(self):
+        cfg, world, agents = self._trade_world()
+        agents[0].received_inventory[0] = cfg.recipe[1] + 10.0
+        agents[1].self_produced_inventory[1] = cfg.recipe[2] + 1.0
+        world.exchange()
+        self.assertEqual(world.trades, [])
+
+    def test_exchange_does_not_modify_energy(self):
+        cfg, world, agents = self._trade_world()
+        self._make_complementary(cfg, *agents)
+        energy = [a.energy for a in agents]
+        world.exchange()
+        self.assertEqual([a.energy for a in agents], energy)
+
+    def test_exchange_stock_conservation_accounts_for_loss_by_good(self):
+        cfg, world, agents = self._trade_world(efficiency=0.75)
+        self._make_complementary(cfg, *agents)
+        before = [sum(a.stock(k) for a in agents) for k in (1, 2)]
+        world.exchange()
+        after = [sum(a.stock(k) for a in agents) for k in (1, 2)]
+        loss = world.trades[0]["transaction_loss"]
+        self.assertAlmostEqual(before[0], after[0] + loss["B"])
+        self.assertAlmostEqual(before[1], after[1] + loss["C"])
 
 
 if __name__ == "__main__":
