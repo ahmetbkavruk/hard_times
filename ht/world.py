@@ -194,8 +194,31 @@ class World:
 
         for cell, occupants in occupancy.items():
             self.rng.shuffle(occupants)
-            for pair_start in range(0, len(occupants) - 1, 2):
-                first, second = occupants[pair_start : pair_start + 2]
+            if self.cfg.trade_matching == "random":
+                pairs = (
+                    occupants[start : start + 2]
+                    for start in range(0, len(occupants) - 1, 2)
+                )
+            else:
+                # Every eligible B donor can trade with every eligible C donor.
+                # Filtering the shuffled order gives random priority within each
+                # side without spending matches on incompatible bystanders.
+                recipe_b, recipe_c = self.cfg.recipe[1:]
+                b_donors, c_donors = [], []
+                for agent in occupants:
+                    if (
+                        agent.self_produced_inventory[0] > recipe_b
+                        and agent.stock(2) < recipe_c
+                    ):
+                        b_donors.append(agent)
+                    elif (
+                        agent.self_produced_inventory[1] > recipe_c
+                        and agent.stock(1) < recipe_b
+                    ):
+                        c_donors.append(agent)
+                pairs = zip(b_donors, c_donors)
+
+            for first, second in pairs:
                 self._exchange_pair(first, second, cell)
 
     def _exchange_pair(

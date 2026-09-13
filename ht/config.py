@@ -22,6 +22,7 @@ class Config:
     production_specialization_exponent: float = 1.0
 
     trade_enabled: bool = True
+    trade_matching: str = "random"
     trade_efficiency: float = 1.0
     max_trade_per_pair: float = 1.0
 
@@ -47,6 +48,8 @@ class Config:
     min_trait_norm: float = 1e-12
 
     def __post_init__(self) -> None:
+        if self.trade_matching not in ("random", "compatible"):
+            raise ValueError("trade_matching must be 'random' or 'compatible'")
         if not (
             isfinite(self.production_specialization_exponent)
             and self.production_specialization_exponent >= 1.0

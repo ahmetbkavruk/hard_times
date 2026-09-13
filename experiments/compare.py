@@ -22,6 +22,7 @@ def run(
     deficit_move_probability: float = 0.12,
     trade_efficiency: float = 1.0,
     max_trade_per_pair: float = 1.0,
+    matchings=("random",),
     make_plots: bool = True,
 ):
     base_config = Config(
@@ -29,13 +30,17 @@ def run(
         trade_efficiency=trade_efficiency,
         max_trade_per_pair=max_trade_per_pair,
     )
+    conditions = [replace(base_config, trade_enabled=False)]
+    conditions.extend(
+        replace(base_config, trade_enabled=True, trade_matching=matching)
+        for matching in dict.fromkeys(matchings)
+    )
     summaries = []
     for gamma in dict.fromkeys(gammas):
         for seed in dict.fromkeys(seeds):
-            for trade_enabled in (False, True):
+            for condition in conditions:
                 config = replace(
-                    base_config,
-                    trade_enabled=trade_enabled,
+                    condition,
                     production_specialization_exponent=gamma,
                 )
                 output_dir = condition_directory(results_dir, config, seed)
@@ -45,7 +50,8 @@ def run(
                 summaries.append({
                     "seed": seed,
                     "production_specialization_exponent": gamma,
-                    "trade_enabled": trade_enabled,
+                    "trade_enabled": config.trade_enabled,
+                    "trade_matching": config.trade_matching,
                     "trade_efficiency": trade_efficiency,
                     "max_trade_per_pair": max_trade_per_pair,
                     "deficit_move_probability": deficit_move_probability,
@@ -72,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--deficit-move-probability", type=float, default=0.12)
     parser.add_argument("--trade-efficiency", type=float, default=1.0)
     parser.add_argument("--max-trade-per-pair", type=float, default=1.0)
+    parser.add_argument("--matchings", nargs="+", choices=("random", "compatible"), default=("random",))
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
     run(
@@ -82,5 +89,6 @@ if __name__ == "__main__":
         deficit_move_probability=args.deficit_move_probability,
         trade_efficiency=args.trade_efficiency,
         max_trade_per_pair=args.max_trade_per_pair,
+        matchings=args.matchings,
         make_plots=not args.no_plots,
     )
