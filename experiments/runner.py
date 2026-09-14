@@ -9,7 +9,7 @@ from ht import Config, World
 
 
 def condition_directory(results_dir: Path, config: Config, seed: int) -> Path:
-    condition = "trade_on" if config.trade_enabled else "trade_off"
+    condition = f"trade_{config.trade_matching}" if config.trade_enabled else "trade_off"
     return (
         results_dir
         / f"gamma_{config.production_specialization_exponent:g}"
@@ -63,6 +63,15 @@ def run_experiment(
             snapshots[world.t] = [agent.production_allocation for agent in world.agents.values()]
     snapshots[world.t] = [agent.production_allocation for agent in world.agents.values()]
 
+    save_results(world, snapshots, steps, output_dir, make_plots=make_plots)
+    return world
+
+
+def save_results(
+    world: World, snapshots: dict, steps: int, output_dir: Path, *, make_plots: bool = True
+) -> None:
+    """Save a completed run, including runs with deliberately prepared founders."""
+    config, seed = world.cfg, world.seed
     output_dir.mkdir(parents=True, exist_ok=True)
     write_csv(output_dir / "history.csv", world.history, world.history[0].keys())
     write_csv(
@@ -91,7 +100,6 @@ def run_experiment(
     final = world.history[-1]
     print(
         f"seed={seed} gamma={config.production_specialization_exponent:g} "
-        f"trade={config.trade_enabled} steps={world.t} "
+        f"trade={config.trade_enabled} matching={config.trade_matching} steps={world.t} "
         f"population={final['population']} trades={final['cumulative_trade_events']}"
     )
-    return world

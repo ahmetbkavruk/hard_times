@@ -53,8 +53,19 @@ harvest transfers at most `q_max * h_A` from the cell to the agent.
 
 After existing agents act and dead agents are removed, the world builds
 occupancy from final positions. It shuffles each occupied cell using the world
-random generator and pairs consecutive occupants. Pairs are disjoint; each
-agent has at most one partner in that timestep.
+random generator. `trade_matching` selects one of two local rules:
+
+- `random` (default): pair consecutive occupants, including incompatible pairs.
+- `compatible`: split the shuffled occupants into eligible B and C donors and
+  pair the two queues. A B donor has self-produced B above its recipe reserve
+  and a C deficit; a C donor satisfies the opposite conditions. Balanced or
+  otherwise ineligible bystanders do not consume trading opportunities.
+
+Both rules form disjoint pairs, so each agent has at most one partner per
+timestep. Compatible matching uses current inventories and needs, not allocation
+labels, and never searches outside the cell. It assumes compatible offers can
+be found locally without an additional search action or energy cost. Random
+matching remains the control for testing that assumption.
 
 For a B donor and C donor, exchange requires self-produced surplus above one
 recipe and a deficit of the opposite good. Deficits include received inventory.
@@ -112,17 +123,61 @@ python experiments/compare.py --gammas 1 1.5 2 --seeds 7 11 17 --steps 600
 The default gamma list is 1, 1.5, 2; gamma is never raised implicitly in the
 model. The comparison also accepts `--trade-efficiency`,
 `--max-trade-per-pair`, `--deficit-move-probability`, `--results-dir`,
-and `--no-plots`.
+`--matchings`, and `--no-plots`.
 
-Each pair has the same configuration except for trade_enabled and starts from
-the same seeded population and environment. Exchange consumes random draws,
+To compare matching rules at fixed gamma, alongside one no-trade control:
+
+```bash
+python experiments/compare.py --gammas 2 --matchings random compatible --seeds 7 11 17 --results-dir results/matching_world
+```
+
+The default matching list contains only `random`, preserving the original
+comparison. Conditions differ only in trade_enabled and the selected matching
+rule and start from the same seeded population and environment. Exchange consumes random draws,
 so later action draws are not synchronized between conditions. Use multiple
 seeds and compare outcomes across runs.
+
+## Test whether specialist lineages can establish
+
+```bash
+python experiments/matching.py --no-plots
+```
+
+This diagnostic holds gamma at 2. Every condition starts with one pure B
+specialist, one pure C specialist, and 18 balanced producers in one cell, all
+with empty inventories and the same A-harvesting genotype. A supply exceeds
+the maximum possible harvest; movement and mutation are disabled. Specialists
+receive no free goods, extra energy, or exemption from ordinary action costs.
+
+Each seed compares no trade, random matching, and compatible matching in two
+phases:
+
+- `survival`: 1,000 steps without reproduction. The policy energy target is
+  raised so it does not throttle successful recipe use.
+- `reproduction`: 200 steps with normal reproduction costs, probability,
+  offspring energy, and policy energy target. Both genotype mutation rates
+  remain zero so founder lineages retain their allocations.
+
+This tests survival and establishment of seeded specialist types. It does not
+test their spontaneous emergence through mutation or their success in a spatial
+environment. `--generalists`, `--seeds`, `--survival-steps`,
+`--reproduction-steps`, `--max-agents`, and `--results-dir` are configurable.
+The default population cap is 1,000; check `capacity_reached_step` before
+interpreting growth. Population share and lineage births/deaths matter alongside
+absolute descendant counts.
+
+Results live under `results/matching/PHASE/gamma_2/CONDITION/seed_S/`.
+In addition to the standard files below, each run saves `founders.json` and
+`lineage_history.csv` with separate B-specialist, C-specialist, and generalist
+counts, births, deaths, and the combined specialist population share. The root
+`summary.csv` records final measurements, specialist extinction time, and the
+first step reaching the population cap.
 
 ## Saved measurements
 
 Each run writes to
-`RESULTS_DIR/gamma_G/trade_on_or_off/seed_S/`:
+`RESULTS_DIR/gamma_G/CONDITION/seed_S/`, where CONDITION is `trade_off`,
+`trade_random`, or `trade_compatible`:
 
 | File | Contents |
 | --- | --- |
@@ -168,4 +223,7 @@ python -m unittest discover -s tests -v
 Tests cover production at gamma = 1 and gamma > 1, atomic recipe use and receipt
 consumption, configurable exploration, reproduction, bounded mutation, seeded
 reproducibility, exchange pairing/provenance/loss accounting, event order, and
-the saved experiment controls and measurements.
+the saved experiment controls and measurements. Compatible-matching tests cover
+bystanders, unbalanced donor counts, locality, disjoint pairs, caps, losses,
+receipt provenance, and seeded reproducibility. Diagnostic tests also check
+founder setup and lineage birth/death accounting.
