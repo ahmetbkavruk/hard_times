@@ -19,8 +19,8 @@ class TestCompatibleMatching(unittest.TestCase):
         first.self_produced_inventory[:] = (1.5, 0.0)
         second.self_produced_inventory[:] = (0.0, 1.5)
 
-    def test_matching_configuration_is_validated_and_random_is_default(self):
-        self.assertEqual(Config().trade_matching, "random")
+    def test_matching_configuration_is_validated_and_neighborhood_is_default(self):
+        self.assertEqual(Config().trade_matching, "neighborhood")
         for value in ("unknown", "", None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 Config(trade_matching=value)

@@ -28,12 +28,13 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         world = World(cfg, seed=7)
         return cfg, world, next(iter(world.agents.values()))
 
-    def _trade_world(self, efficiency=1.0, maximum=10.0, agents=2, seed=7):
+    def _trade_world(self, efficiency=1.0, maximum=10.0, agents=2, seed=7, matching="neighborhood"):
         cfg = Config(
             L=4,
             initial_agents=agents,
             trade_efficiency=efficiency,
             max_trade_per_pair=maximum,
+            trade_matching=matching,
         )
         world = World(cfg, seed=seed)
         traders = list(world.agents.values())
@@ -390,8 +391,8 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         world.record_metrics()
         self.assertEqual(world.history[-1], before)
 
-    def test_no_colocation_means_no_trade(self):
-        cfg, world, agents = self._trade_world()
+    def test_random_matching_requires_colocation(self):
+        cfg, world, agents = self._trade_world(matching="random")
         self._make_complementary(cfg, *agents)
         agents[1].x = 1
         before = [a.self_produced_inventory.copy() for a in agents]
@@ -442,8 +443,8 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         np.testing.assert_allclose(agents[1].received_inventory, (0.5, 0.0))
         self.assertEqual(world.trades[0]["transaction_loss"], {"B": 0.5, "C": 0.5})
 
-    def test_odd_population_leaves_one_agent_unpaired(self):
-        cfg, world, agents = self._trade_world(agents=3)
+    def test_random_matching_leaves_odd_agent_unpaired(self):
+        cfg, world, agents = self._trade_world(agents=3, matching="random")
         self._make_complementary(cfg, agents[0], agents[1])
         agents[2].self_produced_inventory[0] = cfg.recipe[1] + 1.0
         world.exchange()
@@ -451,8 +452,8 @@ class TestEndogenousNicheWorld(unittest.TestCase):
         self.assertEqual(len(paired), 2)
         self.assertEqual(len(set(world.agents) - paired), 1)
 
-    def test_agent_has_at_most_one_trade_per_timestep(self):
-        cfg, world, agents = self._trade_world(agents=4)
+    def test_random_matching_allows_only_one_partner_per_timestep(self):
+        cfg, world, agents = self._trade_world(agents=4, matching="random")
         self._make_complementary(cfg, agents[0], agents[1])
         self._make_complementary(cfg, agents[2], agents[3])
         world.exchange()

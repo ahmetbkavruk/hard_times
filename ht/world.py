@@ -192,7 +192,7 @@ class World:
         self.total_births += 1
 
     def exchange(self) -> None:
-        """Pair co-located survivors and make reciprocal B/C exchanges."""
+        """Exchange among surviving local contacts using current stocks."""
         if not self.cfg.trade_enabled:
             return
 
@@ -200,6 +200,11 @@ class World:
         for agent in self.agents.values():
             occupancy.setdefault((agent.x, agent.y), []).append(agent)
 
+        if self.cfg.trade_matching == "neighborhood":
+            self._exchange_neighborhood(occupancy)
+            return
+
+        # Original one-partner rules remain explicit experimental controls.
         for cell, occupants in occupancy.items():
             self.rng.shuffle(occupants)
             if self.cfg.trade_matching == "random":
@@ -228,6 +233,30 @@ class World:
 
             for first, second in pairs:
                 self._exchange_pair(first, second, cell)
+
+    def _exchange_neighborhood(self, occupancy) -> None:
+        """Visit each same-cell/cardinal-neighbor pair once, with many partners."""
+        agents = list(self.agents.values())
+        self.rng.shuffle(agents)
+        visited = set()
+        length = self.cfg.L
+        for first in agents:
+            visited.add(first.id)
+            x, y = first.x, first.y
+            # Deduplicate wrapped cells, including on grids of side 1 or 2.
+            cells = sorted({
+                (x, y), ((x - 1) % length, y), ((x + 1) % length, y),
+                (x, (y - 1) % length), (x, (y + 1) % length),
+            })
+            partners = [
+                second for cell in cells for second in occupancy.get(cell, ())
+                if second.id not in visited
+            ]
+            self.rng.shuffle(partners)
+            for second in partners:
+                # Earlier exchanges can remove surplus or fill a deficit.
+                # _exchange_pair recalculates both from the current inventory.
+                self._exchange_pair(first, second, (x, y))
 
     def _exchange_pair(
         self, first: Agent, second: Agent, cell: tuple[int, int]
@@ -271,6 +300,10 @@ class World:
                 "t": self.t,
                 "cell": cell,
                 "partner_ids": (first.id, second.id),
+                "partner_cells": {
+                    first.id: (first.x, first.y),
+                    second.id: (second.x, second.y),
+                },
                 "surrendered": {
                     b_donor.id: {"good": "B", "gross": q},
                     c_donor.id: {"good": "C", "gross": q},

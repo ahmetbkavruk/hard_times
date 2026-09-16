@@ -22,7 +22,7 @@ def run(
     deficit_move_probability: float = 0.12,
     trade_efficiency: float = 1.0,
     max_trade_per_pair: float = 1.0,
-    matchings=("random",),
+    matchings=("neighborhood",),
     make_plots: bool = True,
 ):
     base_config = Config(
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--deficit-move-probability", type=float, default=0.12)
     parser.add_argument("--trade-efficiency", type=float, default=1.0)
     parser.add_argument("--max-trade-per-pair", type=float, default=1.0)
-    parser.add_argument("--matchings", nargs="+", choices=("random", "compatible"), default=("random",))
+    parser.add_argument("--matchings", nargs="+", choices=("neighborhood", "random", "compatible"), default=("neighborhood",))
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
     run(
