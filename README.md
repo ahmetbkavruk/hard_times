@@ -2,6 +2,62 @@
 
 A minimal evolutionary ecology for studying whether specialization and interdependence can emerge without a global fitness function.
 
+## Watch the live world
+
+From a local desktop terminal in the repository directory:
+
+```bash
+python -m pip install -r requirements.txt
+python run_viewer.py --seed 7 --steps 600
+```
+
+This opens a live pixel grid and starts playback. Trade is **enabled** by
+default, using the same model and configuration defaults as `run_demo.py`.
+The sidebar displays the actual seed, gamma and trade setting. For example:
+
+```bash
+python run_viewer.py --seed 7 --steps 600 --gamma 2 --trade-matching compatible
+python run_viewer.py --seed 7 --steps 600 --gamma 2 --no-trade
+```
+
+- **Pause / Play** or **Space** stops or resumes time. **Step** or **N** pauses
+  playback and advances exactly one timestep.
+- **Steps / sec** changes the target playback rate (1–60). Slow machines or
+  large populations may run below the target; simulation timesteps are never
+  skipped. `--speed 10` sets the initial rate.
+- Click an occupied cell to inspect an agent's energy, age, lineage, B/C
+  production allocation, inventory provenance and latest action. Click the
+  same cell again to cycle through its occupants. Selection follows that agent
+  as it moves, and its final state remains visible if it dies.
+- **Restart seed** or **R** recreates the initial world with the same seed and
+  settings, paused at step zero. `--paused` starts a new viewer paused.
+- `--size 40` and `--agents 250` set the grid size and initial population.
+  Omit `--steps` to continue until extinction or until the window is closed.
+
+Brighter green ground means more environmental resource A, on a fixed scale
+throughout the run. Agent squares range from **cyan** (C production) through
+**white** (balanced allocation) to **orange** (B production). These colors
+describe production allocation; personality types are a later milestone.
+Multiple occupants are laid out as smaller squares inside their cell, without
+changing their physical positions.
+
+Green square outlines mark successful recipe consumption, pink rings mark
+actual exchanges, and red crosses mark deaths during the latest timestep.
+Highlights remain visible while paused and are replaced on the next step.
+Exchange still follows the existing automatic matching rules described below.
+
+The viewer uses the existing Matplotlib dependency and requires an interactive
+desktop backend such as TkAgg or QtAgg. Run it as a script in a desktop terminal,
+not with an inline notebook or headless `Agg` backend. On Linux, Tk support may
+need the distribution's Python Tk package; a remote session needs a display.
+The viewer reports a clear error if it detects a noninteractive backend.
+
+Rendering, inspection and playback controls never consume simulation random
+draws. Optional action recording keeps only the latest timestep and preserves
+the same seeded trajectory as an ordinary `World` run. The viewer keeps the
+model's usual in-memory history and trade records but does not export run
+files; the experiment runners below provide saved measurements.
+
 ## Implemented mechanics
 
 - A periodic two-dimensional lattice with renewable, spatially heterogeneous resource A.
