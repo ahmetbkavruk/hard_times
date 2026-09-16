@@ -2,14 +2,17 @@ from __future__ import annotations
 from typing import Dict, List
 import numpy as np
 
-from .actions import ActionKind
+from .actions import Action, ActionKind
 from .agent import Agent
 from .config import Config
 from .policies import Observation, Policy, RuleBasedPolicy
 
 
 class World:
-    def __init__(self, config: Config, seed: int = 0, policy: Policy | None = None):
+    def __init__(
+        self, config: Config, seed: int = 0, policy: Policy | None = None,
+        *, record_actions: bool = False,
+    ):
         self.cfg = config
         self.rng = np.random.default_rng(seed)
         self.seed = seed
@@ -18,6 +21,11 @@ class World:
         self.total_births = 0
         self.total_deaths = 0
         self.policy = policy if policy is not None else RuleBasedPolicy(config)
+        # Optional observations of the latest step, never policy inputs. Recording
+        # does not consume random draws or change action/event ordering.
+        self.record_actions = record_actions
+        self.last_actions: Dict[int, Action] = {}
+        self.last_recipe_uses: set[int] = set()
 
         self.capacity = self._make_capacities()
         self.resources = self.capacity.copy()
@@ -282,6 +290,8 @@ class World:
         return True
 
     def step(self):
+        self.last_actions.clear()
+        self.last_recipe_uses.clear()
         self.regenerate_resources()
 
         ids = np.array(list(self.agents.keys()), dtype=int)
@@ -303,6 +313,8 @@ class World:
                 population=len(self.agents),
             )
             action = self.policy.choose_action(observation, self.rng)
+            if self.record_actions:
+                self.last_actions[agent.id] = action
 
             if action.kind is ActionKind.HARVEST:
                 if action.resource is None:
@@ -311,7 +323,9 @@ class World:
                     raise ValueError(f"invalid harvest resource index: {action.resource}")
                 self.do_harvest(agent, action.resource)
             elif action.kind is ActionKind.USE:
-                self.do_use(agent)
+                used = self.do_use(agent)
+                if used and self.record_actions:
+                    self.last_recipe_uses.add(agent.id)
             elif action.kind is ActionKind.PRODUCE:
                 self.do_produce(agent)
             elif action.kind is ActionKind.MOVE:
