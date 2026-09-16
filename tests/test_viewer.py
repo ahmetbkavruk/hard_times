@@ -43,7 +43,10 @@ class TestLiveViewer(unittest.TestCase):
                 np.testing.assert_equal(getattr(left.agents[aid], field.name), getattr(right.agents[aid], field.name))
 
     def test_optional_action_recording_preserves_full_seeded_trajectories(self):
-        for enabled, matching in ((False, "random"), (True, "random"), (True, "compatible")):
+        for enabled, matching in (
+            (False, "neighborhood"), (True, "neighborhood"),
+            (True, "random"), (True, "compatible"),
+        ):
             with self.subTest(trade=enabled, matching=matching):
                 config = Config(L=6, initial_agents=24, max_agents=100, trade_enabled=enabled, trade_matching=matching)
                 plain = World(config, seed=17)
@@ -126,12 +129,13 @@ class TestLiveViewer(unittest.TestCase):
         first, second = viewer.world.agents.values()
         for agent in (first, second):
             agent.x = agent.y = 1
+        second.x = 2
         first.self_produced_inventory[:] = (1.5, 0)
         second.self_produced_inventory[:] = (0, 1.5)
         viewer.selected_agent = first
         viewer.single_step()
         self.assertEqual(len(viewer.recent_trades), 1)
-        np.testing.assert_array_equal(viewer.trade_marks.get_offsets(), [(1, 1)])
+        np.testing.assert_array_equal(viewer.trade_marks.get_offsets(), [(1, 1), (2, 1)])
         self.assertIn("Traded with #1", viewer.agent_text.get_text())
         viewer.single_step()
         self.assertEqual(viewer.recent_trades, [])

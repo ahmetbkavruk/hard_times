@@ -242,7 +242,9 @@ class LiveViewer:
         self.dots.set_sizes(sizes)
         for artist, points, factor in (
             (self.eating_marks, self.eating_cells, 0.92),
-            (self.trade_marks, sorted({tuple(trade["cell"]) for trade in self.recent_trades}), 1.1),
+            (self.trade_marks, sorted({
+                cell for trade in self.recent_trades for cell in trade["partner_cells"].values()
+            }), 1.1),
             (self.death_marks, self.death_cells, 0.75),
         ):
             artist.set_offsets(self._offsets(points))
@@ -298,6 +300,12 @@ class LiveViewer:
         for trade in self.recent_trades:
             if agent.id in trade["partner_ids"]:
                 partners.extend(str(aid) for aid in trade["partner_ids"] if aid != agent.id)
+        partner_text = ""
+        if partners:
+            partner_text = (
+                f"\nTraded with #{', #'.join(partners)}" if len(partners) <= 3
+                else f"\nTraded with {len(partners)} agents"
+            )
         self.agent_text.set_text(
             f"#{agent.id}  |  cell ({agent.x}, {agent.y})"
             + f"\nEnergy  {agent.energy:.2f}   Age {agent.age}"
@@ -308,7 +316,7 @@ class LiveViewer:
             + f"\nB stock    {agent.self_produced_inventory[0]:5.2f}   {agent.received_inventory[0]:5.2f}"
             + f"\nC stock    {agent.self_produced_inventory[1]:5.2f}   {agent.received_inventory[1]:5.2f}"
             + f"\n{latest}"
-            + (f"\nTraded with #{', #'.join(partners)}" if partners else "")
+            + partner_text
         )
 
     def on_click(self, event):
@@ -364,7 +372,7 @@ def main(argv=None):
     parser.add_argument("--paused", action="store_true", help="start paused at step zero")
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--trade", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--trade-matching", choices=("random", "compatible"), default="random")
+    parser.add_argument("--trade-matching", choices=("neighborhood", "random", "compatible"), default="neighborhood")
     parser.add_argument("--deficit-move-probability", type=float, default=0.12)
     args = parser.parse_args(argv)
     if args.seed < 0:

@@ -34,6 +34,10 @@ def _trade_rows(events):
             "cell_y": event["cell"][1],
             "B_donor_id": donors["B"],
             "C_donor_id": donors["C"],
+            "B_donor_x": event["partner_cells"][donors["B"]][0],
+            "B_donor_y": event["partner_cells"][donors["B"]][1],
+            "C_donor_x": event["partner_cells"][donors["C"]][0],
+            "C_donor_y": event["partner_cells"][donors["C"]][1],
             "gross_B": event["surrendered"][donors["B"]]["gross"],
             "gross_C": event["surrendered"][donors["C"]]["gross"],
             "net_B": event["received"][donors["C"]]["net"],
@@ -79,6 +83,7 @@ def save_results(
         _trade_rows(world.trades),
         (
             "t", "cell_x", "cell_y", "B_donor_id", "C_donor_id",
+            "B_donor_x", "B_donor_y", "C_donor_x", "C_donor_y",
             "gross_B", "gross_C", "net_B", "net_C", "loss_B", "loss_C",
         ),
     )

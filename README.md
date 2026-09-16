@@ -12,11 +12,11 @@ python run_viewer.py --seed 7 --steps 600
 ```
 
 This opens a live pixel grid and starts playback. Trade is **enabled** by
-default, using the same model and configuration defaults as `run_demo.py`.
+default, using neighborhood trading and the same model and configuration defaults as `run_demo.py`.
 The sidebar displays the actual seed, gamma and trade setting. For example:
 
 ```bash
-python run_viewer.py --seed 7 --steps 600 --gamma 2 --trade-matching compatible
+python run_viewer.py --seed 7 --steps 600 --gamma 2 --trade-matching neighborhood
 python run_viewer.py --seed 7 --steps 600 --gamma 2 --no-trade
 ```
 
@@ -42,7 +42,7 @@ Multiple occupants are laid out as smaller squares inside their cell, without
 changing their physical positions.
 
 Green square outlines mark successful recipe consumption, pink rings mark
-actual exchanges, and red crosses mark deaths during the latest timestep.
+both participants' cells in actual exchanges, and red crosses mark deaths during the latest timestep.
 Highlights remain visible while paused and are replaced on the next step.
 Exchange still follows the existing automatic matching rules described below.
 
@@ -108,20 +108,33 @@ harvest transfers at most `q_max * h_A` from the cell to the agent.
 ## Exchange and exploration
 
 After existing agents act and dead agents are removed, the world builds
-occupancy from final positions. It shuffles each occupied cell using the world
-random generator. `trade_matching` selects one of two local rules:
+occupancy from final positions. The default `trade_matching="neighborhood"`
+allows each agent to trade with agents in its own cell and the four immediately
+adjacent cells (up, down, left and right). Boundaries wrap exactly as movement
+does; diagonal and more distant cells are excluded.
 
-- `random` (default): pair consecutive occupants, including incompatible pairs.
+The world shuffles agents, then shuffles each agent's as-yet-unvisited local
+contacts, using the world random generator. Every unordered agent pair is
+considered once per timestep, including on grids of side 1 or 2. An agent can
+trade with multiple partners in that timestep. Each exchange rechecks current
+surpluses and deficits, so earlier receipts or exports can limit later trades.
+No persistent partner is assigned, and trading does not move either agent.
+
+The original rules remain available explicitly for earlier experiment controls:
+
+- `random`: pair consecutive shuffled occupants of each cell, including incompatible pairs.
 - `compatible`: split the shuffled occupants into eligible B and C donors and
   pair the two queues. A B donor has self-produced B above its recipe reserve
   and a C deficit; a C donor satisfies the opposite conditions. Balanced or
   otherwise ineligible bystanders do not consume trading opportunities.
 
-Both rules form disjoint pairs, so each agent has at most one partner per
-timestep. Compatible matching uses current inventories and needs, not allocation
-labels, and never searches outside the cell. It assumes compatible offers can
-be found locally without an additional search action or energy cost. Random
-matching remains the control for testing that assumption.
+These two legacy rules form disjoint pairs within each cell and retain the
+one-partner limit. Normal model runs, the viewer and the comparison runner now
+default to `neighborhood`. `experiments/matching.py` remains the historical
+comparison of the two legacy rules and a no-trade control.
+
+All modes use the existing automatic reciprocal exchange mechanism. Neighborhood
+trading adds no search action, extra energy cost, bargaining or partner memory.
 
 For a B donor and C donor, exchange requires self-produced surplus above one
 recipe and a deficit of the opposite good. Deficits include received inventory.
@@ -135,7 +148,9 @@ q = min(B surplus, C surplus, C deficit / efficiency,
 Each recipient gets `efficiency * q`; each good loses
 `(1 - efficiency) * q`. Received goods cannot be re-exported, and exchange
 does not alter energy. Configuration requires `0 < trade_efficiency <= 1`
-and `max_trade_per_pair >= 0`.
+and `max_trade_per_pair >= 0`. The cap is per pair per timestep, so an agent's
+total exchange with several partners may exceed it while respecting available
+self-produced surplus and remaining need.
 
 When B or C is missing, the policy moves with `deficit_move_probability`
 (default 0.12), otherwise it produces. This allows a deficient specialist to
@@ -184,11 +199,11 @@ model. The comparison also accepts `--trade-efficiency`,
 To compare matching rules at fixed gamma, alongside one no-trade control:
 
 ```bash
-python experiments/compare.py --gammas 2 --matchings random compatible --seeds 7 11 17 --results-dir results/matching_world
+python experiments/compare.py --gammas 2 --matchings neighborhood random compatible --seeds 7 11 17 --results-dir results/matching_world
 ```
 
-The default matching list contains only `random`, preserving the original
-comparison. Conditions differ only in trade_enabled and the selected matching
+The default matching list contains only `neighborhood`. Pass `--matchings random`
+to reproduce the earlier comparison. Conditions differ only in trade_enabled and the selected matching
 rule and start from the same seeded population and environment. Exchange consumes random draws,
 so later action draws are not synchronized between conditions. Use multiple
 seeds and compare outcomes across runs.
@@ -233,13 +248,13 @@ first step reaching the population cap.
 
 Each run writes to
 `RESULTS_DIR/gamma_G/CONDITION/seed_S/`, where CONDITION is `trade_off`,
-`trade_random`, or `trade_compatible`:
+`trade_neighborhood`, `trade_random`, or `trade_compatible`:
 
 | File | Contents |
 | --- | --- |
 | `config.json` | Full configuration, seed, requested duration, and completed duration |
 | `history.csv` | Population, energy, traits, inventories, cumulative trade and recipe-use measurements |
-| `trades.csv` | Time, cell, B/C donor IDs, gross transfers, net receipts, and losses per event |
+| `trades.csv` | Time, both donors' cells and IDs, gross transfers, net receipts, and losses per event |
 | `allocation_snapshots.json` | Allocation samples at initialization, one-third, two-thirds, and the last simulated step |
 | `figures/` | Population, energy, traits, allocation distributions, stocks, and trade activity |
 
@@ -252,6 +267,10 @@ or exploration probabilities; rerunning the same path replaces those files.
 All history fields beginning with `cumulative_` accumulate since initialization.
 Gross transfer equals net receipt plus transaction loss separately for each good.
 In `trades.csv`, the C donor receives net_B and the B donor receives net_C.
+`B_donor_x`, `B_donor_y`, `C_donor_x` and `C_donor_y` record both endpoints at
+exchange time. The retained `cell_x` / `cell_y` columns identify the first
+visited partner's cell, which need not contain both partners. In-memory events
+include `partner_cells`, keyed by agent ID, for the same reason.
 A no-trade run still writes the CSV header, with no event rows.
 
 `mean_specialization` is the population mean of `abs(2*s - 1)`: zero for
@@ -283,3 +302,8 @@ the saved experiment controls and measurements. Compatible-matching tests cover
 bystanders, unbalanced donor counts, locality, disjoint pairs, caps, losses,
 receipt provenance, and seeded reproducibility. Diagnostic tests also check
 founder setup and lineage birth/death accounting.
+
+Neighborhood tests cover cardinal locality, periodic boundaries, multiple
+partners, pair deduplication on tiny grids, updated inventory limits, material
+balance, final positions, death removal and seeded event order. Viewer tests
+also check both trade endpoints and independence from rendering and controls.

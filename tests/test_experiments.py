@@ -20,12 +20,13 @@ class TestExperiments(unittest.TestCase):
             root = Path(directory)
             rows = run_comparison(
                 seeds=(7,), gammas=(2.0,), steps=2, results_dir=root,
-                matchings=("random", "compatible"), make_plots=False,
+                matchings=("neighborhood", "random", "compatible"), make_plots=False,
             )
-            self.assertEqual(len(rows), 3)
+            self.assertEqual(len(rows), 4)
             self.assertEqual(sum(not row["trade_enabled"] for row in rows), 1)
             for condition, enabled, matching in (
-                ("trade_off", False, "random"),
+                ("trade_off", False, "neighborhood"),
+                ("trade_neighborhood", True, "neighborhood"),
                 ("trade_random", True, "random"),
                 ("trade_compatible", True, "compatible"),
             ):
@@ -116,6 +117,12 @@ class TestExperiments(unittest.TestCase):
                     {int(row["B_donor_id"]), int(row["C_donor_id"])},
                     set(event["partner_ids"]),
                 )
+                for good in ("B", "C"):
+                    donor = int(row[f"{good}_donor_id"])
+                    self.assertEqual(
+                        (int(row[f"{good}_donor_x"]), int(row[f"{good}_donor_y"])),
+                        event["partner_cells"][donor],
+                    )
 
     def test_comparison_pairs_conditions_with_identical_initial_states(self):
         with TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
@@ -128,7 +135,7 @@ class TestExperiments(unittest.TestCase):
             for gamma in (1, 2):
                 configs = []
                 starts = []
-                for condition in ("trade_off", "trade_random"):
+                for condition in ("trade_off", "trade_neighborhood"):
                     run_dir = output / f"gamma_{gamma}" / condition / "seed_7"
                     configs.append(json.loads((run_dir / "config.json").read_text())["config"])
                     starts.append(json.loads((run_dir / "allocation_snapshots.json").read_text())["0"])
