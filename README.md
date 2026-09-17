@@ -34,8 +34,12 @@ python run_viewer.py --seed 7 --steps 600 --gamma 2 --no-trade
 - `--size 40` and `--agents 250` set the grid size and initial population.
   Omit `--steps` to continue until extinction or until the window is closed.
 
-Brighter green ground means more environmental resource A, on a fixed scale
-throughout the run. Agent squares range from **cyan** (C production) through
+Green ground marks renewable sources; brown ground marks finite deposits.
+Brighter ground means more environmental resource A, on a fixed scale
+throughout the run. Empty finite cells stay dark brown so their type remains
+visible. The readout below the grid reports remaining A and exhausted finite
+cells; the agent inspector also identifies its current ground type.
+Agent squares range from **cyan** (C production) through
 **white** (balanced allocation) to **orange** (B production). These colors
 describe production allocation; personality types are a later milestone.
 Multiple occupants are laid out as smaller squares inside their cell, without
@@ -58,9 +62,58 @@ the same seeded trajectory as an ordinary `World` run. The viewer keeps the
 model's usual in-memory history and trade records but does not export run
 files; the experiment runners below provide saved measurements.
 
+## Finite deposits and renewable patches
+
+To watch a world with half its cells containing nonrenewable A:
+
+```bash
+python run_viewer.py --seed 7 --steps 600 --finite-fraction 0.5
+```
+
+`--finite-fraction` accepts a value between 0 and 1. Zero is the original,
+all-renewable control and remains the default. One makes the whole world
+finite. Intermediate values select that fraction of cells, rounded to the
+nearest whole cell, in clustered patches. Every cell starts with its usual A
+stock. Renewable cells replenish at `regen_rate`, capped by local capacity;
+finite cells have zero regeneration. Once a finite cell is exhausted, it stays
+empty for the rest of that run. Restarting the seed creates a new initial world.
+
+The same resource settings are available in the viewer, the no-trade baseline
+and the comparison runner:
+
+| Option | Meaning |
+| --- | --- |
+| `--finite-fraction 0.5` | Fraction of cells assigned finite A deposits |
+| `--resource-seed 23` | Change the source-type layout independently of starting agents |
+| `--base-capacity 2` | Base initial A per cell, before the existing spatial contrast |
+| `--regen-rate 0.01` | A restored per renewable cell per timestep |
+
+The map has its own random stream. With the same simulation seed, changing
+the finite fraction or resource seed preserves the initial agents, their
+random-generator state, and every cell's initial A amount. For a fixed map
+seed, increasing the finite fraction converts additional cells without moving
+existing finite patches. If omitted, the resource seed derives from the
+simulation seed. Layout generation smooths a seeded random field across the
+periodic grid four times, then ranks cells to obtain the requested count; this
+happens only at initialization and does not transport resources during a run.
+
+For a controlled comparison, keep the simulation seed, policy and production
+settings fixed and vary one resource setting. Repeat with several simulation
+seeds. These commands save the renewable and mixed conditions separately:
+
+```bash
+python experiments/compare.py --gammas 1 --seeds 7 11 17 --steps 600 --finite-fraction 0 --results-dir results/scarcity/renewable
+python experiments/compare.py --gammas 1 --seeds 7 11 17 --steps 600 --finite-fraction 0.5 --results-dir results/scarcity/mixed
+```
+
+Each also includes the existing no-trade control. Agent policies receive the
+available local A amount as before; the source-type mask is not a policy input.
+No migration, settlement or cooperation outcome is prescribed.
+
 ## Implemented mechanics
 
-- A periodic two-dimensional lattice with renewable, spatially heterogeneous resource A.
+- A periodic two-dimensional lattice with spatially heterogeneous resource A,
+  configurable renewable patches and permanently exhaustible deposits.
 - A heritable developmental genotype `g = (h_A, v)`, with nonnegative components and `||g||_2 = 1`, controlling A harvesting and movement cost.
 - An independent, bounded production allocation `s` controlling manufactured B/C output.
 - Separate self-produced and received B/C inventories.
@@ -102,8 +155,10 @@ Every existing agent also pays metabolism each timestep, and agents die at
 energy <= 0. Reproduction transfers child_energy from the parent and dissipates
 reproduce_cost.
 
-Environmental A regeneration is capped by local carrying capacity, and each
-harvest transfers at most `q_max * h_A` from the cell to the agent.
+Environmental A regeneration applies only to renewable cells and is capped by
+local carrying capacity. Finite cells use that capacity only as their initial
+stock. Each harvest transfers at most `q_max * h_A` and at most the amount
+remaining in the cell to the agent.
 
 ## Exchange and exploration
 
@@ -256,13 +311,23 @@ Each run writes to
 | `history.csv` | Population, energy, traits, inventories, cumulative trade and recipe-use measurements |
 | `trades.csv` | Time, both donors' cells and IDs, gross transfers, net receipts, and losses per event |
 | `allocation_snapshots.json` | Allocation samples at initialization, one-third, two-thirds, and the last simulated step |
+| `resource_map.json` | Source-type mask, initial A map, final remaining A map, and final timestep; arrays indexed as `[y][x]` |
 | `figures/` | Population, energy, traits, allocation distributions, stocks, and trade activity |
 
 The comparison additionally writes `summary.csv`, one final row per run.
 Baseline output defaults to `results/`; comparison output defaults to
 `results/comparison/`. Runs are separated by gamma, trade condition, and seed.
 Use a distinct results directory for different durations, efficiencies, caps,
-or exploration probabilities; rerunning the same path replaces those files.
+exploration probabilities or resource settings; rerunning the same path replaces those files.
+
+Resource history includes `renewable_A_remaining`, `finite_A_remaining`,
+`initial_finite_A`, `finite_cells`, `exhausted_finite_cells` and
+`cumulative_finite_A_harvested`. These remaining-stock values refer to the
+environment, not agents' inventories. The finite budget obeys
+`initial_finite_A = finite_A_remaining + cumulative_finite_A_harvested`, up to
+floating-point roundoff. `environmental_resources_seed_S.png` plots remaining
+renewable and finite ground stocks through time. The complete source map is
+saved even for zero-step or early-extinction runs.
 
 All history fields beginning with `cumulative_` accumulate since initialization.
 Gross transfer equals net receipt plus transaction loss separately for each good.
@@ -307,3 +372,6 @@ Neighborhood tests cover cardinal locality, periodic boundaries, multiple
 partners, pair deduplication on tiny grids, updated inventory limits, material
 balance, final positions, death removal and seeded event order. Viewer tests
 also check both trade endpoints and independence from rendering and controls.
+Resource tests cover permanent exhaustion, capped regeneration, competing
+harvesters, exact initial controls, independent map seeds, finite-stock budgets,
+saved maps and viewer reset/color behavior.

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from math import isfinite
+from numbers import Integral
 
 @dataclass(frozen=True)
 class Config:
@@ -12,6 +13,10 @@ class Config:
     base_capacity: float = 8.0
     capacity_contrast: float = 7.0
     regen_rate: float = 0.03
+    # Fraction of grid cells with a finite initial supply of A and no renewal.
+    finite_resource_fraction: float = 0.0
+    # An independent map seed; None derives it from the simulation seed.
+    resource_seed: int | None = None
 
     q_max: float = 1.2
     recipe_energy_gain: float = 4.0
@@ -48,6 +53,18 @@ class Config:
     min_trait_norm: float = 1e-12
 
     def __post_init__(self) -> None:
+        if not 0.0 <= self.finite_resource_fraction <= 1.0:
+            raise ValueError("finite_resource_fraction must be between 0 and 1")
+        if self.resource_seed is not None and (
+            not isinstance(self.resource_seed, Integral) or self.resource_seed < 0
+        ):
+            raise ValueError("resource_seed must be a nonnegative integer or None")
+        for name in ("base_capacity", "regen_rate", "q_max"):
+            value = getattr(self, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if not isfinite(self.capacity_contrast) or self.base_capacity + min(0, self.capacity_contrast) < 0:
+            raise ValueError("capacity_contrast must be finite and keep capacities nonnegative")
         if self.trade_matching not in ("neighborhood", "random", "compatible"):
             raise ValueError("trade_matching must be 'neighborhood', 'random' or 'compatible'")
         if not (

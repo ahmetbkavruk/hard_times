@@ -29,6 +29,9 @@ class World:
 
         self.capacity = self._make_capacities()
         self.resources = self.capacity.copy()
+        self.renewable_mask = self._make_renewable_mask()
+        self.initial_finite_A = float(self.resources[0, ~self.renewable_mask].sum())
+        self.cumulative_finite_A_harvested = 0.0
         self.agents: Dict[int, Agent] = {}
 
         for _ in range(self.cfg.initial_agents):
@@ -75,6 +78,29 @@ class World:
 
         return caps
 
+    def _make_renewable_mask(self) -> np.ndarray:
+        """Make clustered source types without consuming the agent RNG stream."""
+        length = self.cfg.L
+        finite_count = int(round(self.cfg.finite_resource_fraction * length * length))
+        mask = np.ones((length, length), dtype=bool)
+        if finite_count == length * length:
+            mask[:] = False
+        elif finite_count:
+            seed = self.seed if self.cfg.resource_seed is None else self.cfg.resource_seed
+            map_rng = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(1,)))
+            field = map_rng.random((length, length))
+            # Smooth across periodic neighbors to form patches rather than
+            # independently scattered cells. This only constructs the initial map.
+            for _ in range(4):
+                field = (
+                    field + np.roll(field, 1, axis=0) + np.roll(field, -1, axis=0)
+                    + np.roll(field, 1, axis=1) + np.roll(field, -1, axis=1)
+                ) / 5
+            indices = np.argsort(field, axis=None, kind="stable")[:finite_count]
+            mask.flat[indices] = False
+        mask.setflags(write=False)
+        return mask
+
     def _random_genotype(self) -> np.ndarray:
         # The developmental budget now covers only A harvesting and movement.
         g = self.rng.gamma(shape=1.0, scale=1.0, size=2)
@@ -102,7 +128,7 @@ class World:
     def regenerate_resources(self):
         self.resources = np.minimum(
             self.capacity,
-            self.resources + self.cfg.regen_rate,
+            self.resources + self.cfg.regen_rate * self.renewable_mask,
         )
 
     def local_resources(self, agent: Agent) -> np.ndarray:
@@ -113,6 +139,8 @@ class World:
         amount = min(available, self.cfg.q_max * agent.trait_for_resource(k))
         self.resources[k, agent.y, agent.x] -= amount
         agent.inventory[k] += amount
+        if k == 0 and not self.renewable_mask[agent.y, agent.x]:
+            self.cumulative_finite_A_harvested += amount
         agent.energy -= self.cfg.harvest_cost
 
     def do_produce(self, agent: Agent):
@@ -378,6 +406,19 @@ class World:
         self.exchange()
         self.record_metrics()
 
+    def resource_metrics(self) -> dict:
+        """Observe remaining ground stock, independent of agents' inventories."""
+        finite = ~self.renewable_mask
+        stock = self.resources[0]
+        return {
+            "renewable_A_remaining": float(stock[self.renewable_mask].sum()),
+            "finite_A_remaining": float(stock[finite].sum()),
+            "initial_finite_A": self.initial_finite_A,
+            "finite_cells": int(finite.sum()),
+            "exhausted_finite_cells": int(np.count_nonzero(finite & (stock <= 0))),
+            "cumulative_finite_A_harvested": self.cumulative_finite_A_harvested,
+        }
+
     def record_metrics(self):
         n = len(self.agents)
 
@@ -428,6 +469,7 @@ class World:
                 "std_v": float(std_g[1]),
                 "total_B_stock": total_b_stock,
                 "total_C_stock": total_c_stock,
+                **self.resource_metrics(),
                 **{f"cumulative_{key}": value for key, value in self.trade_totals.items()},
                 **{f"cumulative_{key}": value for key, value in self.usage_totals.items()},
             }

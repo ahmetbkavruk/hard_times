@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import numpy as np
 
 from experiments.baseline import run as run_baseline
 from experiments.compare import run as run_comparison
@@ -15,6 +16,40 @@ from ht import Config
 
 
 class TestExperiments(unittest.TestCase):
+    def test_resource_controls_export_the_same_starting_map_and_auditable_depletion(self):
+        with TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            rows = run_comparison(
+                seeds=(7,), gammas=(1,), steps=8, results_dir=root, make_plots=False,
+                finite_resource_fraction=0.5, resource_seed=23, base_capacity=2, regen_rate=0.01,
+            )
+            maps = []
+            for condition in ("trade_off", "trade_neighborhood"):
+                output = root / "gamma_1" / condition / "seed_7"
+                config = json.loads((output / "config.json").read_text())["config"]
+                self.assertEqual(config["finite_resource_fraction"], 0.5)
+                self.assertEqual(config["resource_seed"], 23)
+                self.assertEqual(config["base_capacity"], 2)
+                self.assertEqual(config["regen_rate"], 0.01)
+                resource_map = json.loads((output / "resource_map.json").read_text())
+                maps.append(resource_map)
+                with (output / "history.csv").open() as stream:
+                    history = list(csv.DictReader(stream))
+                for row in history:
+                    self.assertAlmostEqual(
+                        float(row["initial_finite_A"]),
+                        float(row["finite_A_remaining"]) + float(row["cumulative_finite_A_harvested"]),
+                    )
+                finite = ~np.array(resource_map["renewable_mask"], dtype=bool)
+                self.assertEqual(int(finite.sum()), 800)
+                self.assertAlmostEqual(
+                    float(np.array(resource_map["remaining_A"])[finite].sum()),
+                    float(history[-1]["finite_A_remaining"]),
+                )
+            self.assertEqual(maps[0]["renewable_mask"], maps[1]["renewable_mask"])
+            self.assertEqual(maps[0]["initial_A"], maps[1]["initial_A"])
+            self.assertTrue(all(row["finite_resource_fraction"] == 0.5 for row in rows))
+
     def test_matching_modes_have_distinct_outputs_and_one_no_trade_control(self):
         with TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
             root = Path(directory)

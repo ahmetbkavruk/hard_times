@@ -14,7 +14,7 @@ import numpy as np
 from ht.actions import Action, ActionKind
 from ht.agent import Agent
 from ht.config import Config
-from ht.viewer import LiveViewer
+from ht.viewer import FINITE_RESOURCE_COLORS, LiveViewer, RESOURCE_COLORS
 from ht.world import World
 
 
@@ -33,6 +33,7 @@ class TestLiveViewer(unittest.TestCase):
     def assert_same_world(self, left, right):
         np.testing.assert_array_equal(left.resources, right.resources)
         np.testing.assert_array_equal(left.capacity, right.capacity)
+        np.testing.assert_array_equal(left.renewable_mask, right.renewable_mask)
         self.assertEqual(left.rng.bit_generator.state, right.rng.bit_generator.state)
         for attribute in ("t", "next_agent_id", "total_births", "total_deaths", "trades", "trade_totals", "usage_totals"):
             self.assertEqual(getattr(left, attribute), getattr(right, attribute))
@@ -48,7 +49,8 @@ class TestLiveViewer(unittest.TestCase):
             (True, "random"), (True, "compatible"),
         ):
             with self.subTest(trade=enabled, matching=matching):
-                config = Config(L=6, initial_agents=24, max_agents=100, trade_enabled=enabled, trade_matching=matching)
+                config = Config(L=6, initial_agents=24, max_agents=100, trade_enabled=enabled,
+                                trade_matching=matching, finite_resource_fraction=0.5)
                 plain = World(config, seed=17)
                 observed = World(config, seed=17, record_actions=True)
                 for _ in range(100):
@@ -59,7 +61,7 @@ class TestLiveViewer(unittest.TestCase):
                 self.assertEqual(plain.last_recipe_uses, set())
 
     def test_redraw_inspection_speed_and_pause_do_not_change_trajectory(self):
-        config = Config(L=6, initial_agents=12)
+        config = Config(L=6, initial_agents=12, finite_resource_fraction=0.5)
         viewer = LiveViewer(config, seed=11, paused=True)
         plain = World(config, seed=11)
         for _ in range(8):
@@ -156,6 +158,28 @@ class TestLiveViewer(unittest.TestCase):
         viewer.single_step()
         self.assertEqual(viewer.world.t, 1)
         self.assertEqual(viewer.world.rng.bit_generator.state, state)
+
+    def test_finite_ground_stays_identifiable_when_empty_and_restart_restores_it(self):
+        config = Config(L=4, initial_agents=1, finite_resource_fraction=0.5)
+        viewer = LiveViewer(config, seed=7, paused=True)
+        original_mask = viewer.world.renewable_mask.copy()
+        fy, fx = np.argwhere(~original_mask)[0]
+        ry, rx = np.argwhere(original_mask)[0]
+        agent = viewer.world.agents[0]
+        agent.x, agent.y = int(fx), int(fy)
+        viewer.selected_agent = agent
+        viewer.world.resources[0, fy, fx] = 0
+        viewer.world.resources[0, ry, rx] = 0
+        viewer.refresh()
+        image = viewer.resource_image.get_array()
+        np.testing.assert_array_equal(image[fy, fx], FINITE_RESOURCE_COLORS(0.0))
+        np.testing.assert_array_equal(image[ry, rx], RESOURCE_COLORS(0.0))
+        self.assertIn("Empty finite cells: 1 / 8", viewer.resource_text.get_text())
+        self.assertIn("Ground: finite", viewer.agent_text.get_text())
+        viewer.reset()
+        np.testing.assert_array_equal(viewer.world.renewable_mask, original_mask)
+        np.testing.assert_array_equal(viewer.world.resources, viewer.world.capacity)
+        self.assertIn("Empty finite cells: 0 / 8", viewer.resource_text.get_text())
 
 
 if __name__ == "__main__":
