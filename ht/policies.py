@@ -13,6 +13,39 @@ from .config import Config
 
 
 @dataclass(frozen=True)
+class Neighbor:
+    id: int
+    dx: int
+    dy: int
+    energy: float
+    body_energy: float
+    self_produced_inventory: tuple[float, float]
+    received_inventory: tuple[float, float]
+    recent_trades: int = 0
+    harmed_me: bool = False
+
+    def stock(self, good: int) -> float:
+        return self.self_produced_inventory[good - 1] + self.received_inventory[good - 1]
+
+
+@dataclass(frozen=True)
+class NearbyBody:
+    agent_id: int
+    dx: int
+    dy: int
+    edible_energy: float
+
+
+@dataclass(frozen=True)
+class TradeOffer:
+    partner: Neighbor
+    give_good: int
+    receive_good: int
+    gross: float
+    net: float
+
+
+@dataclass(frozen=True)
 class Observation:
     """The portion of world state currently exposed to a policy."""
 
@@ -24,6 +57,14 @@ class Observation:
     production_allocation: float = 0.5
     self_produced_inventory: tuple[float, float] = (0.0, 0.0)
     received_inventory: tuple[float, float] = (0.0, 0.0)
+    lawfulness: float = 0.0
+    concern: float = 0.0
+    neighbors: tuple[Neighbor, ...] = ()
+    # (dx, dy, amount of A) in the four immediately adjacent cells.
+    adjacent_resources: tuple[tuple[int, int, float], ...] = ()
+    bodies: tuple[NearbyBody, ...] = ()
+    last_direction: tuple[int, int] | None = None
+    grid_size: int = 1
 
 
 class Policy(Protocol):

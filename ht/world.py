@@ -1,11 +1,14 @@
 from __future__ import annotations
+from collections import Counter
 from typing import Dict, List
 import numpy as np
 
 from .actions import Action, ActionKind
 from .agent import Agent
 from .config import Config
-from .policies import Observation, Policy, RuleBasedPolicy
+from .policies import Neighbor, NearbyBody, Observation, Policy, RuleBasedPolicy, TradeOffer
+from .social import Alignment, Carcass, Encounter, reflect_trait
+from .social_policy import DIRECTIONS, SocialPolicy
 
 
 class World:
@@ -15,12 +18,28 @@ class World:
     ):
         self.cfg = config
         self.rng = np.random.default_rng(seed)
+        self.trait_rng = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(2,)))
         self.seed = seed
         self.t = 0
         self.next_agent_id = 0
         self.total_births = 0
         self.total_deaths = 0
-        self.policy = policy if policy is not None else RuleBasedPolicy(config)
+        self.policy = policy if policy is not None else (
+            SocialPolicy(config) if config.social_enabled else RuleBasedPolicy(config)
+        )
+        self._acting = False
+        self._occupancy = None
+        self.carcasses: Dict[int, Carcass] = {}
+        self._body_cells: Dict[tuple[int, int], set[int]] = {}
+        self.interactions: List[dict] = []
+        self.social_totals = {
+            "attacks": 0, "combat_deaths": 0, "fleeing": 0, "predation_events": 0,
+            "trade_refusals": 0, "attack_energy_cost": 0.0, "combat_energy_damage": 0.0,
+            "flee_energy_cost": 0.0, "trade_energy_cost": 0.0,
+            "body_energy_born": 0.0, "body_energy_eaten": 0.0,
+            "predation_energy_received": 0.0, "predation_energy_loss": 0.0,
+            "eating_energy_cost": 0.0,
+        }
         # Optional observations of the latest step, never policy inputs. Recording
         # does not consume random draws or change action/event ordering.
         self.record_actions = record_actions
@@ -36,6 +55,8 @@ class World:
 
         for _ in range(self.cfg.initial_agents):
             self._spawn_founder()
+        self.initial_body_energy = sum(agent.body_energy for agent in self.agents.values())
+        self.founder_traits = self.agent_traits()
 
         self.history: List[dict] = []
         self.trades: List[dict] = []
@@ -122,6 +143,9 @@ class World:
             age=0,
             lineage=aid,
             generation=0,
+            lawfulness=float(self.trait_rng.uniform(-1, 1)),
+            concern=float(self.trait_rng.uniform(-1, 1)),
+            body_energy=self.cfg.body_energy if self.cfg.social_enabled else 0.0,
         )
         self.agents[aid] = agent
 
@@ -174,11 +198,30 @@ class World:
         self.usage_totals["recipe_uses_with_received_stock"] += int(used_received_stock)
         return True
 
-    def do_move(self, agent: Agent):
-        dx, dy = ((1, 0), (-1, 0), (0, 1), (0, -1))[int(self.rng.integers(4))]
+    def do_move(self, agent: Agent, direction=None, *, fleeing=False):
+        if direction is not None and direction not in DIRECTIONS:
+            raise ValueError("movement requires a cardinal one-cell direction")
+        if fleeing and not self.cfg.social_enabled:
+            return False
+        dx, dy = direction if direction is not None else DIRECTIONS[int(self.rng.integers(4))]
+        previous = (agent.x, agent.y)
         agent.x = (agent.x + dx) % self.cfg.L
         agent.y = (agent.y + dy) % self.cfg.L
+        agent.last_direction = (dx, dy)
+        if self._occupancy is not None:
+            self._occupancy[previous].discard(agent.id)
+            self._occupancy.setdefault((agent.x, agent.y), set()).add(agent.id)
         agent.energy -= self.cfg.move_cost_scale * (1.0 - agent.v)
+        if fleeing:
+            agent.energy -= self.cfg.flee_cost
+            self.social_totals["fleeing"] += 1
+            self.social_totals["flee_energy_cost"] += self.cfg.flee_cost
+            self.interactions.append({
+                "t": self.event_time, "kind": "flee", "actor_id": agent.id,
+                "from_cell": previous, "cell": (agent.x, agent.y),
+                "energy_cost": self.cfg.move_cost_scale * (1 - agent.v) + self.cfg.flee_cost,
+            })
+        return True
 
     def do_reproduce(self, agent: Agent):
         if agent.energy < self.cfg.reproduce_threshold:
@@ -186,7 +229,8 @@ class World:
         if len(self.agents) >= self.cfg.max_agents:
             return
 
-        total_cost = self.cfg.reproduce_cost + self.cfg.child_energy
+        body_energy = self.cfg.body_energy if self.cfg.social_enabled else 0.0
+        total_cost = self.cfg.reproduce_cost + self.cfg.child_energy + body_energy
         if agent.energy < total_cost:
             return
         agent.energy -= total_cost
@@ -215,9 +259,185 @@ class World:
             age=0,
             lineage=agent.lineage,
             generation=agent.generation + 1,
+            lawfulness=reflect_trait(agent.lawfulness + self.trait_rng.normal(0, self.cfg.social_mutation_sigma)),
+            concern=reflect_trait(agent.concern + self.trait_rng.normal(0, self.cfg.social_mutation_sigma)),
+            body_energy=body_energy,
         )
         self.agents[aid] = child
+        if self._occupancy is not None:
+            self._occupancy.setdefault((child.x, child.y), set()).add(aid)
         self.total_births += 1
+        self.social_totals["body_energy_born"] += body_energy
+        if self.cfg.social_enabled:
+            self.interactions.append({
+                "t": self.event_time, "kind": "birth", "actor_id": agent.id, "target_id": child.id,
+                "cell": (child.x, child.y), "parent_energy_cost": total_cost,
+                "child_energy": child.energy, "body_energy": body_energy,
+                "dissipated_energy": self.cfg.reproduce_cost, "lineage": child.lineage,
+                "generation": child.generation, "lawfulness": child.lawfulness,
+                "concern": child.concern, "alignment": child.alignment.value,
+            })
+
+    @property
+    def event_time(self):
+        return self.t + int(self._acting)
+
+    def _offset(self, origin, destination):
+        length = self.cfg.L
+        offset = (destination - origin) % length
+        return offset if offset <= length // 2 else offset - length
+
+    def _in_contact(self, first, second):
+        return abs(self._offset(first.x, second.x)) + abs(self._offset(first.y, second.y)) <= 1
+
+    def _local_cells(self, agent):
+        radius = min(self.cfg.perception_radius, self.cfg.L)
+        return sorted({
+            ((agent.x + dx) % self.cfg.L, (agent.y + dy) % self.cfg.L)
+            for dx in range(-radius, radius + 1)
+            for dy in range(-radius, radius + 1) if abs(dx) + abs(dy) <= radius
+        })
+
+    def _neighbor(self, observer, other):
+        memory = observer.memory.get(other.id, Encounter())
+        cutoff = self.event_time - self.cfg.memory_duration
+        return Neighbor(
+            id=other.id, dx=self._offset(observer.x, other.x), dy=self._offset(observer.y, other.y),
+            energy=other.energy, body_energy=other.body_energy,
+            self_produced_inventory=tuple(other.self_produced_inventory),
+            received_inventory=tuple(other.received_inventory),
+            recent_trades=memory.trades if memory.last_trade >= 0 and memory.last_trade > cutoff else 0,
+            harmed_me=memory.last_harm >= 0 and memory.last_harm > cutoff,
+        )
+
+    def observe(self, agent: Agent) -> Observation:
+        """Copy local state into immutable values, exposing neither labels nor a map."""
+        neighbors, bodies, adjacent = (), (), ()
+        if self.cfg.social_enabled:
+            occupancy = self._occupancy
+            if occupancy is None:
+                occupancy = {}
+                for other in self.agents.values():
+                    occupancy.setdefault((other.x, other.y), set()).add(other.id)
+            cells = self._local_cells(agent)
+            neighbors = tuple(
+                self._neighbor(agent, self.agents[aid])
+                for cell in cells for aid in sorted(occupancy.get(cell, ()))
+                if aid != agent.id and aid in self.agents and self.agents[aid].energy > 0
+            )
+            bodies = tuple(
+                NearbyBody(aid, self._offset(agent.x, cell[0]), self._offset(agent.y, cell[1]),
+                           self.carcasses[aid].edible_energy)
+                for cell in cells for aid in sorted(self._body_cells.get(cell, ()))
+            )
+            adjacent = tuple((dx, dy, float(self.resources[0, (agent.y + dy) % self.cfg.L,
+                                                             (agent.x + dx) % self.cfg.L]))
+                             for dx, dy in DIRECTIONS)
+        return Observation(
+            energy=agent.energy, inventory=tuple(agent.inventory), genotype=tuple(agent.genotype),
+            production_allocation=agent.production_allocation,
+            self_produced_inventory=tuple(agent.self_produced_inventory),
+            received_inventory=tuple(agent.received_inventory),
+            local_resources=tuple(self.local_resources(agent)), population=len(self.agents),
+            lawfulness=agent.lawfulness, concern=agent.concern, neighbors=neighbors,
+            adjacent_resources=adjacent, bodies=bodies, last_direction=agent.last_direction,
+            grid_size=self.cfg.L,
+        )
+
+    def _prune_memory(self, agent):
+        cutoff = self.event_time - self.cfg.memory_duration
+        agent.memory = {aid: memory for aid, memory in agent.memory.items() if memory.last_event > cutoff}
+        while len(agent.memory) > self.cfg.memory_capacity:
+            oldest = min(agent.memory, key=lambda aid: (agent.memory[aid].last_event, aid))
+            del agent.memory[oldest]
+
+    def _remember(self, agent, other_id, *, harmed=False):
+        self._prune_memory(agent)
+        old = agent.memory.get(other_id, Encounter())
+        recent_trades = old.trades if old.last_trade > self.event_time - self.cfg.memory_duration else 0
+        agent.memory[other_id] = (
+            Encounter(old.last_trade, self.event_time, old.trades) if harmed
+            else Encounter(self.event_time, old.last_harm, recent_trades + 1)
+        )
+        self._prune_memory(agent)
+
+    def _remove_dead(self, *, killed_by=None, candidates=None):
+        if candidates is None:
+            candidates = self.agents.values()
+        dead = [agent for agent in candidates if agent.energy <= 0 and agent.id in self.agents]
+        for agent in dead:
+            del self.agents[agent.id]
+            if self._occupancy is not None:
+                self._occupancy[(agent.x, agent.y)].discard(agent.id)
+            if self.cfg.social_enabled:
+                if agent.body_energy > 0:
+                    self.carcasses[agent.id] = Carcass(agent.id, agent.x, agent.y, agent.body_energy)
+                    self._body_cells.setdefault((agent.x, agent.y), set()).add(agent.id)
+                self.interactions.append({
+                    "t": self.event_time, "kind": "death", "actor_id": agent.id,
+                    "cell": (agent.x, agent.y), "killed_by": (killed_by or {}).get(agent.id),
+                    "body_energy": agent.body_energy,
+                    "discarded_inventory": [agent.stock(k) for k in range(3)],
+                })
+                agent.body_energy = 0.0
+            self.total_deaths += 1
+
+    def do_attack(self, agent: Agent, target_id: int | None) -> bool:
+        target = self.agents.get(target_id)
+        if (not self.cfg.social_enabled or self.agents.get(agent.id) is not agent or target is None
+                or target is agent or target.energy <= 0 or agent.energy <= self.cfg.attack_cost
+                or self.cfg.attack_damage <= 0 or not self._in_contact(agent, target)):
+            return False
+        damage = min(target.energy, self.cfg.attack_damage * (0.5 + agent.hA))
+        agent.energy -= self.cfg.attack_cost
+        target.energy -= damage
+        self._remember(target, agent.id, harmed=True)
+        killed = target.energy <= 0
+        self.social_totals["attacks"] += 1
+        self.social_totals["combat_deaths"] += int(killed)
+        self.social_totals["attack_energy_cost"] += self.cfg.attack_cost
+        self.social_totals["combat_energy_damage"] += damage
+        self.interactions.append({
+            "t": self.event_time, "kind": "attack", "actor_id": agent.id, "target_id": target.id,
+            "cell": (agent.x, agent.y), "target_cell": (target.x, target.y),
+            "energy_cost": self.cfg.attack_cost, "damage": damage, "killed": bool(killed),
+        })
+        self._remove_dead(killed_by={target.id: agent.id} if killed else None, candidates=(target,))
+        return True
+
+    def do_eat_agent(self, agent: Agent, target_id: int | None) -> bool:
+        body = self.carcasses.get(target_id)
+        if (not self.cfg.social_enabled or self.agents.get(agent.id) is not agent or body is None
+                or agent.energy <= self.cfg.eating_cost or not self._in_contact(agent, body)):
+            return False
+        gross = min(body.edible_energy, self.cfg.bite_energy)
+        if gross <= 0:
+            return False
+        net = self.cfg.predation_efficiency * gross
+        body.edible_energy -= gross
+        agent.energy += net - self.cfg.eating_cost
+        self.social_totals["predation_events"] += 1
+        self.social_totals["body_energy_eaten"] += gross
+        self.social_totals["predation_energy_received"] += net
+        self.social_totals["predation_energy_loss"] += gross - net
+        self.social_totals["eating_energy_cost"] += self.cfg.eating_cost
+        self.interactions.append({
+            "t": self.event_time, "kind": "eat_agent", "actor_id": agent.id, "target_id": target_id,
+            "cell": (agent.x, agent.y), "target_cell": (body.x, body.y),
+            "gross_energy": gross, "received_energy": net, "loss": gross - net,
+            "energy_cost": self.cfg.eating_cost,
+        })
+        if body.edible_energy <= 0:
+            del self.carcasses[target_id]
+            self._body_cells[(body.x, body.y)].discard(target_id)
+            if not self._body_cells[(body.x, body.y)]:
+                del self._body_cells[(body.x, body.y)]
+        return True
+
+    def agent_traits(self):
+        return [dict(id=a.id, lineage=a.lineage, generation=a.generation,
+                     lawfulness=a.lawfulness, concern=a.concern, alignment=a.alignment.value)
+                for a in self.agents.values()]
 
     def exchange(self) -> None:
         """Exchange among surviving local contacts using current stocks."""
@@ -316,6 +536,27 @@ class World:
 
         net = self.cfg.trade_efficiency * q
         loss = (1.0 - self.cfg.trade_efficiency) * q
+        if self.cfg.social_enabled:
+            consent = getattr(self.policy, "willing_to_trade", None)
+            if consent is None or min(first.energy, second.energy) <= self.cfg.trade_energy_cost:
+                return False
+            b_offer = TradeOffer(self._neighbor(b_donor, c_donor), 1, 2, q, net)
+            c_offer = TradeOffer(self._neighbor(c_donor, b_donor), 2, 1, q, net)
+            b_agrees = consent(self.observe(b_donor), b_offer, self.rng)
+            c_agrees = consent(self.observe(c_donor), c_offer, self.rng)
+            if not (b_agrees and c_agrees):
+                self.social_totals["trade_refusals"] += 1
+                self.interactions.append({
+                    "t": self.event_time, "kind": "trade_refused", "actor_id": b_donor.id,
+                    "target_id": c_donor.id, "consented": [bool(b_agrees), bool(c_agrees)],
+                    "cell": (b_donor.x, b_donor.y), "target_cell": (c_donor.x, c_donor.y),
+                })
+                return False
+            first.energy -= self.cfg.trade_energy_cost
+            second.energy -= self.cfg.trade_energy_cost
+            self.social_totals["trade_energy_cost"] += 2 * self.cfg.trade_energy_cost
+            self._remember(first, second.id)
+            self._remember(second, first.id)
         # All limits have been established before either partner is mutated.
         # Debiting only self-produced stock also prevents receipt re-export.
         b_donor.self_produced_inventory[0] -= q
@@ -341,6 +582,7 @@ class World:
                     c_donor.id: {"good": "B", "net": net},
                 },
                 "transaction_loss": {"B": loss, "C": loss},
+                "energy_cost_per_agent": self.cfg.trade_energy_cost if self.cfg.social_enabled else 0.0,
             }
         )
         self.trade_totals["trade_events"] += 1
@@ -357,22 +599,32 @@ class World:
 
         ids = np.array(list(self.agents.keys()), dtype=int)
         self.rng.shuffle(ids)
+        self._acting = True
+        if self.cfg.social_enabled:
+            self._occupancy = {}
+            for agent in self.agents.values():
+                self._occupancy.setdefault((agent.x, agent.y), set()).add(agent.id)
+                self._prune_memory(agent)
+        try:
+            self._act_agents(ids)
+            self._remove_dead()
+            self.t += 1
+            self._acting = False
+            self.exchange()
+            self.record_metrics()
+        finally:
+            self._acting = False
+            self._occupancy = None
 
+    def _act_agents(self, ids):
         for aid in ids:
             agent = self.agents.get(int(aid))
             if agent is None:
                 continue
-
-            observation = Observation(
-                energy=agent.energy,
-                inventory=tuple(agent.inventory),
-                genotype=tuple(agent.genotype),
-                production_allocation=agent.production_allocation,
-                self_produced_inventory=tuple(agent.self_produced_inventory),
-                received_inventory=tuple(agent.received_inventory),
-                local_resources=tuple(self.local_resources(agent)),
-                population=len(self.agents),
-            )
+            if self.cfg.social_enabled and agent.energy <= 0:
+                self._remove_dead(candidates=(agent,))
+                continue
+            observation = self.observe(agent)
             action = self.policy.choose_action(observation, self.rng)
             if self.record_actions:
                 self.last_actions[agent.id] = action
@@ -390,21 +642,23 @@ class World:
             elif action.kind is ActionKind.PRODUCE:
                 self.do_produce(agent)
             elif action.kind is ActionKind.MOVE:
-                self.do_move(agent)
+                if action.direction is None:
+                    self.do_move(agent)
+                else:
+                    self.do_move(agent, action.direction)
             elif action.kind is ActionKind.REPRODUCE:
                 self.do_reproduce(agent)
+            elif action.kind is ActionKind.ATTACK:
+                self.do_attack(agent, action.target_id)
+            elif action.kind is ActionKind.FLEE:
+                self.do_move(agent, action.direction, fleeing=True)
+            elif action.kind is ActionKind.EAT_AGENT:
+                self.do_eat_agent(agent, action.target_id)
 
             agent.energy -= self.cfg.metabolism
             agent.age += 1
-
-        dead = [aid for aid, a in self.agents.items() if a.energy <= 0.0]
-        for aid in dead:
-            del self.agents[aid]
-        self.total_deaths += len(dead)
-
-        self.t += 1
-        self.exchange()
-        self.record_metrics()
+            if self.cfg.social_enabled:
+                self._remove_dead(candidates=(agent,))
 
     def resource_metrics(self) -> dict:
         """Observe remaining ground stock, independent of agents' inventories."""
@@ -421,6 +675,7 @@ class World:
 
     def record_metrics(self):
         n = len(self.agents)
+        alignment_counts = Counter(a.alignment for a in self.agents.values())
 
         if n:
             G = np.stack([a.genotype for a in self.agents.values()])
@@ -472,6 +727,14 @@ class World:
                 **self.resource_metrics(),
                 **{f"cumulative_{key}": value for key, value in self.trade_totals.items()},
                 **{f"cumulative_{key}": value for key, value in self.usage_totals.items()},
+                **{f"cumulative_{key}": value for key, value in self.social_totals.items()},
+                "initial_body_energy": self.initial_body_energy,
+                "living_body_energy": sum(a.body_energy for a in self.agents.values()),
+                "carcass_energy": sum(b.edible_energy for b in self.carcasses.values()),
+                "mean_lawfulness": float(np.mean([a.lawfulness for a in self.agents.values()])) if n else np.nan,
+                "mean_concern": float(np.mean([a.concern for a in self.agents.values()])) if n else np.nan,
+                **{f"population_{alignment.value}": alignment_counts[alignment]
+                   for alignment in Alignment},
             }
         )
 
