@@ -1,6 +1,9 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from math import isfinite
 import numpy as np
+
+from .social import Alignment, Encounter, alignment_for
 
 @dataclass
 class Agent:
@@ -16,6 +19,11 @@ class Agent:
     age: int = 0
     lineage: int = -1
     generation: int = 0
+    lawfulness: float = 0.0
+    concern: float = 0.0
+    body_energy: float = 0.0
+    memory: dict[int, Encounter] = field(default_factory=dict)
+    last_direction: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         # Allocation is a scalar trait rather than part of the normalized
@@ -23,6 +31,13 @@ class Agent:
         self.production_allocation = float(
             np.clip(self.production_allocation, 0.0, 1.0)
         )
+        alignment_for(self.lawfulness, self.concern)
+        if not isfinite(self.body_energy) or self.body_energy < 0:
+            raise ValueError("body_energy must be finite and nonnegative")
+
+    @property
+    def alignment(self) -> Alignment:
+        return alignment_for(self.lawfulness, self.concern)
 
     @property
     def hA(self) -> float:

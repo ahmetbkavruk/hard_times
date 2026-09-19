@@ -11,8 +11,19 @@ python -m pip install -r requirements.txt
 python run_viewer.py --seed 7 --steps 600
 ```
 
-This opens a live pixel grid and starts playback. Trade is **enabled** by
-default, using neighborhood trading and the same model and configuration defaults as `run_demo.py`.
+For milestone 3, enable local social decisions and alignment colors:
+
+```bash
+python run_viewer.py --social --seed 7 --steps 600 --finite-fraction 0.5
+```
+
+Agents can perceive neighbors, remember recent encounters, choose movement
+directions, accept or refuse exchanges, fight, flee, and consume finite remains.
+See [the social model](SOCIAL_MODEL.md) for the precise assumptions and energy
+accounting. Omit `--social` to run the earlier baseline controller.
+
+The viewer opens a live pixel grid and starts playback. Trade is **enabled** by
+default, using neighborhood trading. Without `--social`, its model and configuration defaults match `run_demo.py`.
 The sidebar displays the actual seed, gamma and trade setting. For example:
 
 ```bash
@@ -31,6 +42,8 @@ python run_viewer.py --seed 7 --steps 600 --gamma 2 --no-trade
   as it moves, and its final state remains visible if it dies.
 - **Restart seed** or **R** recreates the initial world with the same seed and
   settings, paused at step zero. `--paused` starts a new viewer paused.
+- **Colors** or **C** switches between alignment and production allocation.
+  `--color-by alignment` or `--color-by production` sets the initial view.
 - `--size 40` and `--agents 250` set the grid size and initial population.
   Omit `--steps` to continue until extinction or until the window is closed.
 
@@ -39,16 +52,19 @@ Brighter ground means more environmental resource A, on a fixed scale
 throughout the run. Empty finite cells stay dark brown so their type remains
 visible. The readout below the grid reports remaining A and exhausted finite
 cells; the agent inspector also identifies its current ground type.
-Agent squares range from **cyan** (C production) through
-**white** (balanced allocation) to **orange** (B production). These colors
-describe production allocation; personality types are a later milestone.
+In social mode, each of the nine alignments has its own color and legend.
+The inspector shows lawfulness and concern as numerical tendencies. The
+production view ranges from **cyan** (C production) through **white** (balanced
+allocation) to **orange** (B production); this remains the baseline's default.
 Multiple occupants are laid out as smaller squares inside their cell, without
 changing their physical positions.
 
 Green square outlines mark successful recipe consumption, pink rings mark
 both participants' cells in actual exchanges, and red crosses mark deaths during the latest timestep.
 Highlights remain visible while paused and are replaced on the next step.
-Exchange still follows the existing automatic matching rules described below.
+In social mode, red diamonds mark attacks, blue arrows mark fleeing, pale
+triangles mark eating remains, and small beige dots mark remaining carcasses.
+Exchange uses mutual consent in social mode and automatic matching in the baseline.
 
 The viewer uses the existing Matplotlib dependency and requires an interactive
 desktop backend such as TkAgg or QtAgg. Run it as a script in a desktop terminal,
@@ -61,6 +77,53 @@ draws. Optional action recording keeps only the latest timestep and preserves
 the same seeded trajectory as an ordinary `World` run. The viewer keeps the
 model's usual in-memory history and trade records but does not export run
 files; the experiment runners below provide saved measurements.
+
+## Individual tendencies and local choices
+
+Alignment labels describe two continuous heritable tendencies. They never
+assign an action, ally, enemy, faction, route or territory. Higher lawfulness
+means more consistent choices and stronger preferences for recent successful
+trade contacts. Greater concern reduces attack utility and increases the value
+assigned to a trade partner's benefit. Hunger, resources, effort, risk and
+actual remembered encounters also affect decisions. Good agents can defend
+themselves; evil agents can cooperate profitably.
+
+| Alignment | Color |
+| --- | --- |
+| Lawful Good | Blue `#53b7ff` |
+| Neutral Good | Mint `#5ce0b5` |
+| Chaotic Good | Yellow `#e3e86a` |
+| Lawful Neutral | Lavender `#b2a2ff` |
+| True Neutral | Silver `#d4d9e0` |
+| Chaotic Neutral | Orange `#ffb45c` |
+| Lawful Evil | Magenta `#e075c4` |
+| Neutral Evil | Brown `#ad8057` |
+| Chaotic Evil | Red `#ff555f` |
+
+Perception is local (radius two by default), with at most eight remembered
+contacts for 30 timesteps. Interaction range is the same cell plus its four
+cardinal neighbors. Each potential exchange still rechecks current stocks and
+can involve multiple partners, but both participants must consent and pay the
+configured energy cost. These are stochastic hand-written preferences; the
+model is not trained and no collective outcome is guaranteed.
+
+Combat costs energy and can kill. It gives the attacker no immediate food.
+Eating is a separate action that consumes a finite corpse reserve with a
+conversion loss and handling cost. Newborn bodies and energy are funded by the
+parent, so reproduction cannot supply free prey. Natural deaths also leave
+finite remains. Body reserves do not regenerate or decay in this milestone.
+
+The same `--social` switch works in both experiment runners:
+
+```bash
+python experiments/compare.py --social --seeds 7 11 17 --gammas 1 --steps 600 --finite-fraction 0.5 --results-dir results/social_mixed
+```
+
+Keep the controller, seed and other parameters fixed when comparing renewable
+and finite environments. Enabling social mode changes both policy and
+interaction mechanics, so comparing it with the baseline does not isolate an
+alignment effect. Full decision rules, limitations, configurable physical costs,
+and conservation identities are documented in [SOCIAL_MODEL.md](SOCIAL_MODEL.md).
 
 ## Finite deposits and renewable patches
 
@@ -106,8 +169,8 @@ python experiments/compare.py --gammas 1 --seeds 7 11 17 --steps 600 --finite-fr
 python experiments/compare.py --gammas 1 --seeds 7 11 17 --steps 600 --finite-fraction 0.5 --results-dir results/scarcity/mixed
 ```
 
-Each also includes the existing no-trade control. Agent policies receive the
-available local A amount as before; the source-type mask is not a policy input.
+Each also includes the existing no-trade control. Agent policies receive
+available A amounts; the source-type mask is not a policy input.
 No migration, settlement or cooperation outcome is prescribed.
 
 ## Implemented mechanics
@@ -119,6 +182,8 @@ No migration, settlement or cooperation outcome is prescribed.
 - Separate self-produced and received B/C inventories.
 - Local movement, harvesting, production, atomic recipe use, reproduction, and death.
 - Reciprocal local exchange, with configurable efficiency and per-pair limits.
+- Optional social tendencies, local perception and memory, voluntary exchange,
+  directed movement, combat, fleeing and consumption of finite remains.
 - Parent-funded child energy, dissipative reproductive overhead, mutation, lineage tracking, and deterministic runs for a fixed seed and configuration.
 
 `agent.py` owns individual state, `world.py` applies physical consequences, `actions.py` defines decisions, and `policies.py` chooses actions from immutable observations. There is no assigned fitness variable. Reproductive success is measured from the resulting history.
@@ -143,7 +208,7 @@ This models a productivity advantage from concentrating effort at the same
 production action cost. It does not guarantee survival or the evolution of
 specialists: raising gamma also makes mixed producers less productive.
 
-Energy is obtained only by atomically consuming the configured A/B/C recipe:
+In the baseline, energy is obtained by atomically consuming the configured A/B/C recipe:
 
 ```text
 energy change on successful use = recipe_energy_gain - use_cost
@@ -153,7 +218,8 @@ An incomplete recipe changes neither inventories nor energy. Self-produced
 stock is consumed before received stock. B/C inventory alone gives no energy.
 Every existing agent also pays metabolism each timestep, and agents die at
 energy <= 0. Reproduction transfers child_energy from the parent and dissipates
-reproduce_cost.
+reproduce_cost. Social mode also allows energy transfer from finite body
+reserves and charges parents for each child's body; see the accounting rules above.
 
 Environmental A regeneration applies only to renewable cells and is capped by
 local carrying capacity. Finite cells use that capacity only as their initial
@@ -188,8 +254,9 @@ one-partner limit. Normal model runs, the viewer and the comparison runner now
 default to `neighborhood`. `experiments/matching.py` remains the historical
 comparison of the two legacy rules and a no-trade control.
 
-All modes use the existing automatic reciprocal exchange mechanism. Neighborhood
-trading adds no search action, extra energy cost, bargaining or partner memory.
+In the baseline, all matching modes use automatic reciprocal exchange without
+extra energy cost or partner memory. Social mode adds local search preferences,
+bounded contact memory and bilateral consent before any exchange is committed.
 
 For a B donor and C donor, exchange requires self-produced surplus above one
 recipe and a deficit of the opposite good. Deficits include received inventory.
@@ -202,12 +269,13 @@ q = min(B surplus, C surplus, C deficit / efficiency,
 
 Each recipient gets `efficiency * q`; each good loses
 `(1 - efficiency) * q`. Received goods cannot be re-exported, and exchange
-does not alter energy. Configuration requires `0 < trade_efficiency <= 1`
+does not alter energy in the baseline. Social mode charges `trade_energy_cost`
+to each participant per accepted exchange. Configuration requires `0 < trade_efficiency <= 1`
 and `max_trade_per_pair >= 0`. The cap is per pair per timestep, so an agent's
 total exchange with several partners may exceed it while respecting available
 self-produced surplus and remaining need.
 
-When B or C is missing, the policy moves with `deficit_move_probability`
+In the baseline, when B or C is missing, the policy moves with `deficit_move_probability`
 (default 0.12), otherwise it produces. This allows a deficient specialist to
 explore instead of producing forever at one position. Movement is random:
 agents receive no information about partners. The same policy and probability
@@ -305,6 +373,8 @@ Each run writes to
 `RESULTS_DIR/gamma_G/CONDITION/seed_S/`, where CONDITION is `trade_off`,
 `trade_neighborhood`, `trade_random`, or `trade_compatible`:
 
+Social runs use `RESULTS_DIR/social/gamma_G/CONDITION/seed_S/`.
+
 | File | Contents |
 | --- | --- |
 | `config.json` | Full configuration, seed, requested duration, and completed duration |
@@ -312,13 +382,16 @@ Each run writes to
 | `trades.csv` | Time, both donors' cells and IDs, gross transfers, net receipts, and losses per event |
 | `allocation_snapshots.json` | Allocation samples at initialization, one-third, two-thirds, and the last simulated step |
 | `resource_map.json` | Source-type mask, initial A map, final remaining A map, and final timestep; arrays indexed as `[y][x]` |
-| `figures/` | Population, energy, traits, allocation distributions, stocks, and trade activity |
+| `agent_traits.json` | Founders' and survivors' lawfulness, concern, alignment and lineage |
+| `interactions.json` | Births with child traits, attacks, deaths, fleeing, food transfers and refused trades, with actual costs and losses |
+| `carcasses.json` | Remaining finite body stocks and their positions |
+| `figures/` | Population, energy, traits, allocation, stocks, trade, alignments and social activity |
 
 The comparison additionally writes `summary.csv`, one final row per run.
 Baseline output defaults to `results/`; comparison output defaults to
 `results/comparison/`. Runs are separated by gamma, trade condition, and seed.
 Use a distinct results directory for different durations, efficiencies, caps,
-exploration probabilities or resource settings; rerunning the same path replaces those files.
+exploration probabilities, policies or resource settings; rerunning the same path replaces those files.
 
 Resource history includes `renewable_A_remaining`, `finite_A_remaining`,
 `initial_finite_A`, `finite_cells`, `exhausted_finite_cells` and
@@ -337,6 +410,9 @@ exchange time. The retained `cell_x` / `cell_y` columns identify the first
 visited partner's cell, which need not contain both partners. In-memory events
 include `partner_cells`, keyed by agent ID, for the same reason.
 A no-trade run still writes the CSV header, with no event rows.
+`energy_cost_per_agent` records the social exchange cost (zero in the baseline).
+Social histories additionally record attacks, combat deaths, fleeing, predation,
+refused trades, alignment populations and the finite-body energy budget.
 
 `mean_specialization` is the population mean of `abs(2*s - 1)`: zero for
 balanced producers and one for endpoint producers. It is a descriptive measure

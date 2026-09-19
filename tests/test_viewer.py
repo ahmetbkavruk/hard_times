@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backend_bases import KeyEvent, MouseEvent
+from matplotlib.colors import to_hex
 import numpy as np
 
 from ht.actions import Action, ActionKind
@@ -16,6 +17,7 @@ from ht.agent import Agent
 from ht.config import Config
 from ht.viewer import FINITE_RESOURCE_COLORS, LiveViewer, RESOURCE_COLORS
 from ht.world import World
+from ht.social import ALIGNMENT_COLORS
 
 
 class FixedPolicy:
@@ -35,7 +37,9 @@ class TestLiveViewer(unittest.TestCase):
         np.testing.assert_array_equal(left.capacity, right.capacity)
         np.testing.assert_array_equal(left.renewable_mask, right.renewable_mask)
         self.assertEqual(left.rng.bit_generator.state, right.rng.bit_generator.state)
-        for attribute in ("t", "next_agent_id", "total_births", "total_deaths", "trades", "trade_totals", "usage_totals"):
+        self.assertEqual(left.trait_rng.bit_generator.state, right.trait_rng.bit_generator.state)
+        for attribute in ("t", "next_agent_id", "total_births", "total_deaths", "trades", "trade_totals", "usage_totals",
+                          "social_totals", "interactions", "carcasses"):
             self.assertEqual(getattr(left, attribute), getattr(right, attribute))
         np.testing.assert_equal(left.history, right.history)
         self.assertEqual(list(left.agents), list(right.agents))
@@ -61,11 +65,12 @@ class TestLiveViewer(unittest.TestCase):
                 self.assertEqual(plain.last_recipe_uses, set())
 
     def test_redraw_inspection_speed_and_pause_do_not_change_trajectory(self):
-        config = Config(L=6, initial_agents=12, finite_resource_fraction=0.5)
+        config = Config(L=6, initial_agents=12, finite_resource_fraction=0.5, social_enabled=True)
         viewer = LiveViewer(config, seed=11, paused=True)
         plain = World(config, seed=11)
         for _ in range(8):
             viewer.refresh()
+            viewer.toggle_colors()
             agent = next(iter(viewer.world.agents.values()))
             viewer.on_click(SimpleNamespace(inaxes=viewer.grid, button=1, xdata=agent.x, ydata=agent.y))
             viewer.speed_slider.set_val(37)
@@ -180,6 +185,57 @@ class TestLiveViewer(unittest.TestCase):
         np.testing.assert_array_equal(viewer.world.renewable_mask, original_mask)
         np.testing.assert_array_equal(viewer.world.resources, viewer.world.capacity)
         self.assertIn("Empty finite cells: 0 / 8", viewer.resource_text.get_text())
+
+    def test_all_alignments_have_distinct_colors_and_inspection_does_not_change_state(self):
+        viewer = LiveViewer(Config(L=4, initial_agents=9, social_enabled=True), seed=7, paused=True)
+        for agent, (order, care) in zip(viewer.world.agents.values(),
+                                       ((o, c) for o in (-1, 0, 1) for c in (-1, 0, 1))):
+            agent.lawfulness, agent.concern = order, care
+        viewer.selected_agent = viewer.world.agents[0]
+        before = copy.deepcopy(viewer.world.rng.bit_generator.state)
+        viewer.refresh()
+        self.assertEqual({to_hex(color) for color in viewer.dots.get_facecolors()}, set(ALIGNMENT_COLORS.values()))
+        self.assertIn(viewer.selected_agent.alignment.label, viewer.agent_text.get_text())
+        self.assertIn("Policy      social", viewer.world_text.get_text())
+        viewer.toggle_colors()
+        self.assertFalse(viewer.alignment_legend.get_visible())
+        self.assertIsNotNone(viewer.dots.get_array())
+        viewer.toggle_colors()
+        self.assertTrue(viewer.alignment_legend.get_visible())
+        self.assertEqual(viewer.world.rng.bit_generator.state, before)
+        viewer.reset()
+        self.assert_same_world(viewer.world, World(viewer.config, seed=7))
+
+    def test_social_highlights_are_actual_events_and_clear_on_restart(self):
+        class AttackPolicy:
+            def choose_action(self, observation, rng):
+                return Action(ActionKind.ATTACK, target_id=1)
+
+        config = Config(L=3, initial_agents=2, social_enabled=True, metabolism=0, trade_enabled=False)
+        viewer = LiveViewer(config, seed=7, paused=True)
+        first, target = viewer.world.agents.values()
+        first.x = first.y = target.x = target.y = 1
+        target.energy = 0.1
+        viewer.world.policy = AttackPolicy()
+        viewer.selected_agent = first
+        viewer.single_step()
+        self.assertEqual(len(viewer.attack_marks.get_offsets()), 1)
+        self.assertEqual(len(viewer.body_marks.get_offsets()), 1)
+        self.assertIn("Attack #1", viewer.agent_text.get_text())
+
+        class EatPolicy:
+            def choose_action(self, observation, rng):
+                return Action(ActionKind.EAT_AGENT, target_id=1)
+
+        viewer.world.policy = EatPolicy()
+        viewer.single_step()
+        self.assertEqual(len(viewer.attack_marks.get_offsets()), 0)
+        self.assertEqual(len(viewer.predation_marks.get_offsets()), 1)
+        self.assertIn("Ate remains of #1", viewer.agent_text.get_text())
+        viewer.reset()
+        self.assertEqual(viewer.recent_interactions, [])
+        self.assertEqual(len(viewer.body_marks.get_offsets()), 0)
+        self.assertEqual(len(viewer.predation_marks.get_offsets()), 0)
 
 
 if __name__ == "__main__":

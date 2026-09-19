@@ -23,6 +23,7 @@ def run(
     resource_seed: int | None = None,
     base_capacity: float = 8.0,
     regen_rate: float = 0.03,
+    social_enabled: bool = False,
     make_plots: bool = True,
 ):
     config = Config(
@@ -31,6 +32,7 @@ def run(
         deficit_move_probability=deficit_move_probability,
         finite_resource_fraction=finite_resource_fraction, resource_seed=resource_seed,
         base_capacity=base_capacity, regen_rate=regen_rate,
+        social_enabled=social_enabled,
     )
     output_dir = condition_directory(results_dir, config, seed)
     world = run_experiment(config, seed, steps, output_dir, make_plots=make_plots)
@@ -49,6 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--resource-seed", type=int)
     parser.add_argument("--base-capacity", type=float, default=8.0)
     parser.add_argument("--regen-rate", type=float, default=0.03)
+    parser.add_argument("--social", action="store_true")
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
     run(
@@ -59,5 +62,6 @@ if __name__ == "__main__":
         deficit_move_probability=args.deficit_move_probability,
         finite_resource_fraction=args.finite_fraction, resource_seed=args.resource_seed,
         base_capacity=args.base_capacity, regen_rate=args.regen_rate,
+        social_enabled=args.social,
         make_plots=not args.no_plots,
     )

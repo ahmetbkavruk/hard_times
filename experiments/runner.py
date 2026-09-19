@@ -9,6 +9,8 @@ from ht import Config, World
 
 
 def condition_directory(results_dir: Path, config: Config, seed: int) -> Path:
+    if config.social_enabled:
+        results_dir = results_dir / "social"
     condition = f"trade_{config.trade_matching}" if config.trade_enabled else "trade_off"
     return (
         results_dir
@@ -44,6 +46,7 @@ def _trade_rows(events):
             "net_C": event["received"][donors["B"]]["net"],
             "loss_B": event["transaction_loss"]["B"],
             "loss_C": event["transaction_loss"]["C"],
+            "energy_cost_per_agent": event["energy_cost_per_agent"],
         }
 
 
@@ -85,6 +88,7 @@ def save_results(
             "t", "cell_x", "cell_y", "B_donor_id", "C_donor_id",
             "B_donor_x", "B_donor_y", "C_donor_x", "C_donor_y",
             "gross_B", "gross_C", "net_B", "net_C", "loss_B", "loss_C",
+            "energy_cost_per_agent",
         ),
     )
     metadata = {
@@ -106,6 +110,15 @@ def save_results(
     (output_dir / "resource_map.json").write_text(
         json.dumps(resource_map) + "\n", encoding="utf-8"
     )
+    (output_dir / "interactions.json").write_text(
+        json.dumps(world.interactions) + "\n", encoding="utf-8"
+    )
+    (output_dir / "agent_traits.json").write_text(
+        json.dumps({"founders": world.founder_traits, "survivors": world.agent_traits()}) + "\n", encoding="utf-8"
+    )
+    (output_dir / "carcasses.json").write_text(
+        json.dumps([asdict(body) for body in world.carcasses.values()]) + "\n", encoding="utf-8"
+    )
     if make_plots:
         from experiments.plotting import plot_run
 
@@ -116,5 +129,6 @@ def save_results(
         f"seed={seed} gamma={config.production_specialization_exponent:g} "
         f"trade={config.trade_enabled} matching={config.trade_matching} steps={world.t} "
         f"finite_fraction={config.finite_resource_fraction:g} "
+        f"social={config.social_enabled} "
         f"population={final['population']} trades={final['cumulative_trade_events']}"
     )

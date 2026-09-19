@@ -12,11 +12,13 @@ from math import ceil, sqrt
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D
 from matplotlib.widgets import Button, Slider
 import numpy as np
 
 from .actions import ActionKind
 from .config import Config
+from .social import ALIGNMENT_COLORS, Alignment
 from .world import World
 
 
@@ -41,6 +43,7 @@ class LiveViewer:
     def __init__(
         self, config: Config, seed: int = 7, *, speed: int = 10,
         steps: int | None = None, paused: bool = False,
+        color_by: str | None = None,
     ):
         if not 1 <= speed <= 60:
             raise ValueError("speed must be between 1 and 60 steps per second")
@@ -50,22 +53,26 @@ class LiveViewer:
         self.seed = seed
         self.steps = steps
         self.paused = paused
+        self.color_by = color_by or ("alignment" if config.social_enabled else "production")
+        if self.color_by not in ("alignment", "production"):
+            raise ValueError("color_by must be 'alignment' or 'production'")
         self.world = World(config, seed=seed, record_actions=True)
         self.selected_agent = None
         self.selected_died_at = None
         self.recent_trades = []
+        self.recent_interactions = []
         self.eating_cells = []
         self.death_cells = []
         self.agent_positions = {}
 
         with plt.rc_context({"font.family": "DejaVu Sans", "toolbar": "None"}):
-            self.figure = plt.figure(figsize=(12, 8), facecolor=BACKGROUND)
+            self.figure = plt.figure(figsize=(14, 10), facecolor=BACKGROUND)
         self.figure.canvas.manager.set_window_title("Hard Times | Live world")
         self.figure.text(0.045, 0.945, "HARD TIMES", color=TEXT, fontsize=23, weight="bold")
         self.figure.text(0.045, 0.908, "LIVE WORLD  /  observe a seeded simulation", color=MUTED, fontsize=10)
         self.status = self.figure.text(0.955, 0.943, "", color=EATING, fontsize=11, ha="right")
 
-        self.grid = self.figure.add_axes([0.045, 0.215, 0.59, 0.655], facecolor=BACKGROUND)
+        self.grid = self.figure.add_axes([0.035, 0.275, 0.61, 0.61], facecolor=BACKGROUND)
         self.grid.set_aspect("equal")
         self.grid.set_xlim(-0.5, config.L - 0.5)
         self.grid.set_ylim(config.L - 0.5, -0.5)
@@ -92,46 +99,66 @@ class LiveViewer:
         self.death_marks = self.grid.scatter(
             [], [], marker="x", color="#fa8279", linewidths=1.1, zorder=5,
         )
+        self.body_marks = self.grid.scatter([], [], marker=".", color="#b7a893", zorder=2)
+        self.attack_marks = self.grid.scatter(
+            [], [], marker="D", facecolors="none", edgecolors="#ff555f", linewidths=1.3, zorder=5,
+        )
+        self.predation_marks = self.grid.scatter(
+            [], [], marker="^", facecolors="none", edgecolors="#ffe6ad", linewidths=1.4, zorder=5,
+        )
+        self.flee_marks = self.grid.scatter(
+            [], [], marker=">", facecolors="none", edgecolors="#83e8ff", linewidths=1.3, zorder=5,
+        )
         self.selection = self.grid.scatter(
             [], [], marker="s", facecolors="none", edgecolors="white",
             linewidths=1.7, zorder=6,
         )
 
-        self.sidebar = self.figure.add_axes([0.675, 0.215, 0.285, 0.655], facecolor=PANEL)
+        self.sidebar = self.figure.add_axes([0.675, 0.235, 0.285, 0.65], facecolor=PANEL)
         self.sidebar.set_xticks([])
         self.sidebar.set_yticks([])
         for spine in self.sidebar.spines.values():
             spine.set_visible(False)
         self.sidebar.text(0.065, 0.955, "WORLD", color=MUTED, fontsize=10, weight="bold")
         self.world_text = self.sidebar.text(
-            0.065, 0.895, "", va="top", color=TEXT, fontsize=11, linespacing=1.65,
+            0.065, 0.90, "", va="top", color=TEXT, fontsize=10, linespacing=1.4,
             fontfamily="DejaVu Sans Mono",
         )
-        self.sidebar.axhline(0.54, xmin=0.065, xmax=0.935, color="#34424f", linewidth=0.8)
-        self.sidebar.text(0.065, 0.50, "AGENT INSPECTOR", color=MUTED, fontsize=10, weight="bold")
+        self.sidebar.axhline(0.55, xmin=0.065, xmax=0.935, color="#34424f", linewidth=0.8)
+        self.sidebar.text(0.065, 0.515, "AGENT INSPECTOR", color=MUTED, fontsize=10, weight="bold")
         self.agent_text = self.sidebar.text(
-            0.065, 0.445, "", va="top", color=TEXT, fontsize=9.5, linespacing=1.6,
+            0.065, 0.475, "", va="top", color=TEXT, fontsize=9, linespacing=1.4,
             fontfamily="DejaVu Sans Mono",
         )
 
-        color_axis = self.figure.add_axes([0.12, 0.172, 0.25, 0.012])
+        color_axis = self.figure.add_axes([0.12, 0.17, 0.25, 0.012])
         color_axis.imshow(np.linspace(0, 1, 256)[None, :], aspect="auto", cmap=AGENT_COLORS)
         color_axis.set_axis_off()
-        self.figure.text(0.045, 0.171, "C output", color="#50caff", fontsize=9)
-        self.figure.text(0.38, 0.171, "B output", color="#ffb454", fontsize=9)
+        self.production_legend = [color_axis,
+            self.figure.text(0.045, 0.17, "C output", color="#50caff", fontsize=9),
+            self.figure.text(0.38, 0.17, "B output", color="#ffb454", fontsize=9),
+        ]
+        self.alignment_legend = self.figure.legend(
+            handles=[Line2D([], [], marker="s", linestyle="none", color=ALIGNMENT_COLORS[a],
+                            markersize=7, label=a.label) for a in Alignment],
+            ncol=3, loc="lower left", bbox_to_anchor=(0.035, 0.135),
+            frameon=False, labelcolor=TEXT, fontsize=9, columnspacing=1.5,
+        )
         self.figure.text(
-            0.045, 0.144, "Ground: green = renewable, brown = finite; brighter = more A",
+            0.045, 0.246, "Ground: green = renewable, brown = finite; brighter = more A",
             color=MUTED, fontsize=9,
         )
-        self.resource_text = self.figure.text(0.045, 0.119, "", color=MUTED, fontsize=8.5)
-        self.figure.text(0.675, 0.18, "Green square: ate a recipe", color=EATING, fontsize=9)
-        self.figure.text(0.675, 0.153, "Pink ring: traded   /   Red cross: died", color=TRADING, fontsize=9)
-        self.figure.text(0.675, 0.126, "Highlights show the latest step.", color=MUTED, fontsize=8.5)
+        self.resource_text = self.figure.text(0.045, 0.222, "", color=MUTED, fontsize=8.5)
+        self.figure.text(0.675, 0.21, "Green square: recipe   /   Pink ring: trade", color=MUTED, fontsize=9)
+        self.figure.text(0.675, 0.187, "Red diamond: attack   /   Red cross: death", color=MUTED, fontsize=9)
+        self.figure.text(0.675, 0.164, "Blue arrow: flee   /   Pale triangle: ate remains", color=MUTED, fontsize=9)
+        self.figure.text(0.675, 0.14, "Highlights: latest step. Small beige dots: remains.", color=MUTED, fontsize=8.5)
 
         self.play_button = self._button([0.045, 0.06, 0.12, 0.05], "Pause", self.toggle_play)
         self.step_button = self._button([0.175, 0.06, 0.12, 0.05], "Step", self.single_step)
         self.reset_button = self._button([0.305, 0.06, 0.12, 0.05], "Restart seed", self.reset)
-        slider_axis = self.figure.add_axes([0.545, 0.078, 0.325, 0.015], facecolor=PANEL)
+        self.color_button = self._button([0.435, 0.06, 0.14, 0.05], "Colors", self.toggle_colors)
+        slider_axis = self.figure.add_axes([0.675, 0.078, 0.23, 0.015], facecolor=PANEL)
         self.speed_slider = Slider(
             slider_axis, "Steps / sec", 1, 60, valinit=speed, valstep=1,
             valfmt="%d", color="#71b9b1", track_color="#34424f",
@@ -140,7 +167,7 @@ class LiveViewer:
         self.speed_slider.valtext.set_color(TEXT)
         self.figure.text(
             0.045, 0.023,
-            "SPACE  play / pause     N  one step     R  restart     Click a cell to inspect; click again to cycle agents.",
+            "SPACE  play / pause     N  one step     R  restart     C  change colors     Click a cell to inspect; click again to cycle agents.",
             color=MUTED, fontsize=8.5,
         )
 
@@ -175,11 +202,16 @@ class LiveViewer:
         self.paused = True
         self.advance()
 
+    def toggle_colors(self, event=None):
+        self.color_by = "production" if self.color_by == "alignment" else "alignment"
+        self.refresh()
+
     def reset(self, event=None):
         self.world = World(self.config, seed=self.seed, record_actions=True)
         self.selected_agent = None
         self.selected_died_at = None
         self.recent_trades = []
+        self.recent_interactions = []
         self.eating_cells = []
         self.death_cells = []
         self.paused = True
@@ -199,8 +231,10 @@ class LiveViewer:
             return
         previous_agents = dict(self.world.agents)
         trade_start = len(self.world.trades)
+        interaction_start = len(self.world.interactions)
         self.world.step()
         self.recent_trades = self.world.trades[trade_start:]
+        self.recent_interactions = self.world.interactions[interaction_start:]
         self.eating_cells = [
             (previous_agents[aid].x, previous_agents[aid].y)
             for aid in sorted(self.world.last_recipe_uses)
@@ -237,7 +271,7 @@ class LiveViewer:
         occupancy = defaultdict(list)
         for agent in world.agents.values():
             occupancy[(agent.x, agent.y)].append(agent)
-        positions, allocations, sizes = [], [], []
+        positions, allocations, alignment_colors, sizes = [], [], [], []
         self.agent_positions = {}
         # Subcell offsets reveal co-location without changing physical positions.
         cell_points = min(self.grid.bbox.width, self.grid.bbox.height) * 72 / self.figure.dpi / self.config.L
@@ -252,9 +286,18 @@ class LiveViewer:
                 self.agent_positions[agent.id] = position
                 positions.append(position)
                 allocations.append(agent.production_allocation)
+                alignment_colors.append(ALIGNMENT_COLORS[agent.alignment])
                 sizes.append((0.65 * cell_points / columns) ** 2)
         self.dots.set_offsets(self._offsets(positions))
-        self.dots.set_array(np.asarray(allocations))
+        if self.color_by == "alignment":
+            self.dots.set_array(None)
+            self.dots.set_facecolors(alignment_colors)
+        else:
+            self.dots.set_array(np.asarray(allocations))
+        self.alignment_legend.set_visible(self.color_by == "alignment")
+        for artist in self.production_legend:
+            artist.set_visible(self.color_by == "production")
+        self.color_button.label.set_text(f"Colors: {self.color_by}")
         self.dots.set_sizes(sizes)
         for artist, points, factor in (
             (self.eating_marks, self.eating_cells, 0.92),
@@ -262,6 +305,13 @@ class LiveViewer:
                 cell for trade in self.recent_trades for cell in trade["partner_cells"].values()
             }), 1.1),
             (self.death_marks, self.death_cells, 0.75),
+            (self.body_marks, [(b.x, b.y) for b in world.carcasses.values()], 0.45),
+            (self.attack_marks, sorted({tuple(event[key]) for event in self.recent_interactions
+                                       if event["kind"] == "attack" for key in ("cell", "target_cell")}), 1.1),
+            (self.predation_marks, [event["cell"] for event in self.recent_interactions
+                                   if event["kind"] == "eat_agent"], 1.1),
+            (self.flee_marks, [event["cell"] for event in self.recent_interactions
+                              if event["kind"] == "flee"], 1.1),
         ):
             artist.set_offsets(self._offsets(points))
             artist.set_sizes([(cell_points * factor) ** 2])
@@ -287,8 +337,12 @@ class LiveViewer:
             + f"\nSeed        {self.seed}"
             + f"\nGamma       {self.config.production_specialization_exponent:g}"
             + f"\nTrade       {trade_mode}"
+            + f"\nPolicy      {'social' if self.config.social_enabled else 'baseline'}"
             + f"\nAte / traded this step:"
             + f"\n{len(world.last_recipe_uses)} agents / {len(self.recent_trades)} pairs"
+            + f"\nAttacks / fled / ate remains: "
+            + " / ".join(str(sum(event["kind"] == kind for event in self.recent_interactions))
+                         for kind in ("attack", "flee", "eat_agent"))
         )
         self._inspect_agent()
         self.figure.canvas.draw_idle()
@@ -306,10 +360,15 @@ class LiveViewer:
             ActionKind.MOVE: "Move", ActionKind.HARVEST: "Harvest A",
             ActionKind.PRODUCE: "Produce B/C", ActionKind.REPRODUCE: "Try reproduction",
             ActionKind.USE: "Eat recipe",
+            ActionKind.ATTACK: "Try attack", ActionKind.FLEE: "Flee", ActionKind.EAT_AGENT: "Try eating remains",
         }
         latest = labels[action.kind] if action else ("Newborn" if agent.age == 0 and self.world.t else "No action yet")
         if action and action.kind is ActionKind.USE and agent.id not in self.world.last_recipe_uses:
             latest = "Eat (incomplete recipe)"
+        if action and action.target_id is not None:
+            if any(e["actor_id"] == agent.id and e["kind"] == action.kind.value for e in self.recent_interactions):
+                latest = "Attack" if action.kind is ActionKind.ATTACK else "Ate remains of"
+            latest += f" #{action.target_id}"
         if not alive:
             latest = f"Died at step {self.selected_died_at}"
         partners = []
@@ -324,6 +383,8 @@ class LiveViewer:
             )
         self.agent_text.set_text(
             f"#{agent.id}  |  cell ({agent.x}, {agent.y})"
+            + f"\n{agent.alignment.label}"
+            + f"\nLawfulness {agent.lawfulness:+.2f}  Concern {agent.concern:+.2f}"
             + f"\nEnergy  {agent.energy:.2f}   Age {agent.age}"
             + f"\nLineage {agent.lineage}   Gen {agent.generation}"
             + f"\nAllocation B {agent.production_allocation:.2f}"
@@ -332,6 +393,7 @@ class LiveViewer:
             + f"\nB stock    {agent.self_produced_inventory[0]:5.2f}   {agent.received_inventory[0]:5.2f}"
             + f"\nC stock    {agent.self_produced_inventory[1]:5.2f}   {agent.received_inventory[1]:5.2f}"
             + f"\nGround: {'renewable' if self.world.renewable_mask[agent.y, agent.x] else 'finite'}"
+            + f"\nBody {agent.body_energy:.1f}  Memory {len(agent.memory)} contacts"
             + f"\n{latest}"
             + partner_text
         )
@@ -355,7 +417,7 @@ class LiveViewer:
         self.refresh()
 
     def on_key(self, event):
-        callbacks = {" ": self.toggle_play, "n": self.single_step, "r": self.reset}
+        callbacks = {" ": self.toggle_play, "n": self.single_step, "r": self.reset, "c": self.toggle_colors}
         callback = callbacks.get(event.key)
         if callback:
             callback()
@@ -387,6 +449,8 @@ def main(argv=None):
     parser.add_argument("--agents", type=positive_integer, default=250, help="initial population")
     parser.add_argument("--speed", type=int, choices=range(1, 61), default=10, metavar="1..60", help="target steps per second")
     parser.add_argument("--paused", action="store_true", help="start paused at step zero")
+    parser.add_argument("--social", action="store_true", help="enable local social decisions, combat and predation")
+    parser.add_argument("--color-by", choices=("alignment", "production"), help="initial agent colors (default: alignment with --social)")
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--finite-fraction", type=float, default=0.0, help="fraction of cells with nonrenewable A (0 to 1)")
     parser.add_argument("--resource-seed", type=int, help="change the source-type map independently of starting agents")
@@ -408,10 +472,12 @@ def main(argv=None):
             production_specialization_exponent=args.gamma,
             trade_enabled=args.trade, trade_matching=args.trade_matching,
             deficit_move_probability=args.deficit_move_probability,
+            social_enabled=args.social,
         )
     except ValueError as error:
         parser.error(str(error))
-    viewer = LiveViewer(config, seed=args.seed, speed=args.speed, steps=args.steps, paused=args.paused)
+    viewer = LiveViewer(config, seed=args.seed, speed=args.speed, steps=args.steps, paused=args.paused,
+                        color_by=args.color_by)
     try:
         viewer.show()
     except RuntimeError as error:

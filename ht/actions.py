@@ -14,6 +14,9 @@ class ActionKind(str, Enum):
     PRODUCE = "produce"
     MOVE = "move"
     REPRODUCE = "reproduce"
+    ATTACK = "attack"
+    FLEE = "flee"
+    EAT_AGENT = "eat_agent"
 
 
 @dataclass(frozen=True)
@@ -22,3 +25,5 @@ class Action:
 
     kind: ActionKind
     resource: int | None = None
+    direction: tuple[int, int] | None = None
+    target_id: int | None = None
