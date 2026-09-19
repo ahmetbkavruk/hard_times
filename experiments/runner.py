@@ -97,6 +97,15 @@ def save_results(
     (output_dir / "allocation_snapshots.json").write_text(
         json.dumps(snapshots, indent=2) + "\n", encoding="utf-8"
     )
+    resource_map = {
+        "t": world.t,
+        "renewable_mask": world.renewable_mask.tolist(),
+        "initial_A": world.capacity[0].tolist(),
+        "remaining_A": world.resources[0].tolist(),
+    }
+    (output_dir / "resource_map.json").write_text(
+        json.dumps(resource_map) + "\n", encoding="utf-8"
+    )
     if make_plots:
         from experiments.plotting import plot_run
 
@@ -106,5 +115,6 @@ def save_results(
     print(
         f"seed={seed} gamma={config.production_specialization_exponent:g} "
         f"trade={config.trade_enabled} matching={config.trade_matching} steps={world.t} "
+        f"finite_fraction={config.finite_resource_fraction:g} "
         f"population={final['population']} trades={final['cumulative_trade_events']}"
     )

@@ -29,6 +29,9 @@ TRADING = "#f58be0"
 RESOURCE_COLORS = LinearSegmentedColormap.from_list(
     "resource_amount", ["#151c22", "#29443e", "#527b62"]
 )
+FINITE_RESOURCE_COLORS = LinearSegmentedColormap.from_list(
+    "finite_resource_amount", ["#261b18", "#594333", "#927256"]
+)
 AGENT_COLORS = LinearSegmentedColormap.from_list(
     "production_allocation", ["#50caff", "#ebedf1", "#ffb454"]
 )
@@ -116,7 +119,11 @@ class LiveViewer:
         color_axis.set_axis_off()
         self.figure.text(0.045, 0.171, "C output", color="#50caff", fontsize=9)
         self.figure.text(0.38, 0.171, "B output", color="#ffb454", fontsize=9)
-        self.figure.text(0.045, 0.144, "Ground: brighter = more resource A", color=MUTED, fontsize=9)
+        self.figure.text(
+            0.045, 0.144, "Ground: green = renewable, brown = finite; brighter = more A",
+            color=MUTED, fontsize=9,
+        )
+        self.resource_text = self.figure.text(0.045, 0.119, "", color=MUTED, fontsize=8.5)
         self.figure.text(0.675, 0.18, "Green square: ate a recipe", color=EATING, fontsize=9)
         self.figure.text(0.675, 0.153, "Pink ring: traded   /   Red cross: died", color=TRADING, fontsize=9)
         self.figure.text(0.675, 0.126, "Highlights show the latest step.", color=MUTED, fontsize=8.5)
@@ -217,7 +224,16 @@ class LiveViewer:
     def refresh(self):
         """Read world state and update artists; never advance or randomize it."""
         world = self.world
-        self.resource_image.set_data(world.resources[0])
+        intensity = np.clip(world.resources[0] / self.resource_image.get_clim()[1], 0, 1)
+        colors = RESOURCE_COLORS(intensity)
+        colors[~world.renewable_mask] = FINITE_RESOURCE_COLORS(intensity[~world.renewable_mask])
+        self.resource_image.set_data(colors)
+        resource_state = world.resource_metrics()
+        self.resource_text.set_text(
+            f"A remaining: {resource_state['renewable_A_remaining']:,.1f} renewable"
+            f"  /  {resource_state['finite_A_remaining']:,.1f} finite"
+            f"    Empty finite cells: {resource_state['exhausted_finite_cells']} / {resource_state['finite_cells']}"
+        )
         occupancy = defaultdict(list)
         for agent in world.agents.values():
             occupancy[(agent.x, agent.y)].append(agent)
@@ -315,6 +331,7 @@ class LiveViewer:
             + "\n            own  received"
             + f"\nB stock    {agent.self_produced_inventory[0]:5.2f}   {agent.received_inventory[0]:5.2f}"
             + f"\nC stock    {agent.self_produced_inventory[1]:5.2f}   {agent.received_inventory[1]:5.2f}"
+            + f"\nGround: {'renewable' if self.world.renewable_mask[agent.y, agent.x] else 'finite'}"
             + f"\n{latest}"
             + partner_text
         )
@@ -371,6 +388,10 @@ def main(argv=None):
     parser.add_argument("--speed", type=int, choices=range(1, 61), default=10, metavar="1..60", help="target steps per second")
     parser.add_argument("--paused", action="store_true", help="start paused at step zero")
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--finite-fraction", type=float, default=0.0, help="fraction of cells with nonrenewable A (0 to 1)")
+    parser.add_argument("--resource-seed", type=int, help="change the source-type map independently of starting agents")
+    parser.add_argument("--base-capacity", type=float, default=8.0, help="base initial A per cell")
+    parser.add_argument("--regen-rate", type=float, default=0.03, help="A restored per renewable cell per step")
     parser.add_argument("--trade", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--trade-matching", choices=("neighborhood", "random", "compatible"), default="neighborhood")
     parser.add_argument("--deficit-move-probability", type=float, default=0.12)
@@ -382,6 +403,8 @@ def main(argv=None):
     try:
         config = Config(
             L=args.size, initial_agents=args.agents,
+            finite_resource_fraction=args.finite_fraction, resource_seed=args.resource_seed,
+            base_capacity=args.base_capacity, regen_rate=args.regen_rate,
             production_specialization_exponent=args.gamma,
             trade_enabled=args.trade, trade_matching=args.trade_matching,
             deficit_move_probability=args.deficit_move_probability,

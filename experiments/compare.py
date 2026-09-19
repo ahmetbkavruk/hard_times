@@ -23,12 +23,18 @@ def run(
     trade_efficiency: float = 1.0,
     max_trade_per_pair: float = 1.0,
     matchings=("neighborhood",),
+    finite_resource_fraction: float = 0.0,
+    resource_seed: int | None = None,
+    base_capacity: float = 8.0,
+    regen_rate: float = 0.03,
     make_plots: bool = True,
 ):
     base_config = Config(
         deficit_move_probability=deficit_move_probability,
         trade_efficiency=trade_efficiency,
         max_trade_per_pair=max_trade_per_pair,
+        finite_resource_fraction=finite_resource_fraction, resource_seed=resource_seed,
+        base_capacity=base_capacity, regen_rate=regen_rate,
     )
     conditions = [replace(base_config, trade_enabled=False)]
     conditions.extend(
@@ -55,6 +61,10 @@ def run(
                     "trade_efficiency": trade_efficiency,
                     "max_trade_per_pair": max_trade_per_pair,
                     "deficit_move_probability": deficit_move_probability,
+                    "finite_resource_fraction": config.finite_resource_fraction,
+                    "resource_seed": config.resource_seed,
+                    "base_capacity": config.base_capacity,
+                    "regen_rate": config.regen_rate,
                     "requested_steps": steps,
                     **final,
                     "fraction_recipe_uses_with_received_stock": (
@@ -79,6 +89,10 @@ if __name__ == "__main__":
     parser.add_argument("--trade-efficiency", type=float, default=1.0)
     parser.add_argument("--max-trade-per-pair", type=float, default=1.0)
     parser.add_argument("--matchings", nargs="+", choices=("neighborhood", "random", "compatible"), default=("neighborhood",))
+    parser.add_argument("--finite-fraction", type=float, default=0.0)
+    parser.add_argument("--resource-seed", type=int)
+    parser.add_argument("--base-capacity", type=float, default=8.0)
+    parser.add_argument("--regen-rate", type=float, default=0.03)
     parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
     run(
@@ -90,5 +104,7 @@ if __name__ == "__main__":
         trade_efficiency=args.trade_efficiency,
         max_trade_per_pair=args.max_trade_per_pair,
         matchings=args.matchings,
+        finite_resource_fraction=args.finite_fraction, resource_seed=args.resource_seed,
+        base_capacity=args.base_capacity, regen_rate=args.regen_rate,
         make_plots=not args.no_plots,
     )

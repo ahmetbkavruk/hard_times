@@ -98,6 +98,13 @@ def plot_run(history, allocation_snapshots, seed: int, output_dir: Path):
     ax.legend()
     _save(fig, output_dir, f"manufactured_inventories_seed_{seed}.png")
 
+    fig, ax = plt.subplots()
+    ax.plot(time, _series(history, "renewable_A_remaining"), label="Renewable ground", color="#527b62")
+    ax.plot(time, _series(history, "finite_A_remaining"), label="Finite deposits", color="#927256")
+    ax.set(xlabel="Timestep", ylabel="Resource A remaining", title="Environmental resource stocks")
+    ax.legend()
+    _save(fig, output_dir, f"environmental_resources_seed_{seed}.png")
+
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(7, 7))
     axes[0].plot(time, _series(history, "cumulative_trade_events"), label="Trades")
     axes[0].plot(
