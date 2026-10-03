@@ -6,9 +6,12 @@ import json
 from pathlib import Path
 
 from ht import Config, World
+from ht.fields import FIELD_CHANNELS
 
 
 def condition_directory(results_dir: Path, config: Config, seed: int) -> Path:
+    if config.fields_enabled:
+        results_dir = results_dir / f"fields_decay_{config.field_decay:g}_diffusion_{config.field_diffusion:g}"
     if config.social_enabled:
         results_dir = results_dir / "social"
     condition = f"trade_{config.trade_matching}" if config.trade_enabled else "trade_off"
@@ -119,6 +122,18 @@ def save_results(
     (output_dir / "carcasses.json").write_text(
         json.dumps([asdict(body) for body in world.carcasses.values()]) + "\n", encoding="utf-8"
     )
+    if world.fields is not None:
+        write_csv(output_dir / "field_history.csv", world.fields.history, world.fields.history[0].keys())
+        field_map = {
+            "t": world.fields.t, "axis_order": "y, x", "unit": "event weight",
+            "decay": config.field_decay, "diffusion": config.field_diffusion,
+            "fields": {channel: world.fields.layer(channel).tolist() for channel in FIELD_CHANNELS},
+        }
+        (output_dir / "field_map.json").write_text(json.dumps(field_map) + "\n", encoding="utf-8")
+    else:
+        # A caller may deliberately reuse an output directory for a control.
+        for name in ("field_map.json", "field_history.csv"):
+            (output_dir / name).unlink(missing_ok=True)
     if make_plots:
         from experiments.plotting import plot_run
 

@@ -31,6 +31,11 @@ class Config:
     trade_efficiency: float = 1.0
     max_trade_per_pair: float = 1.0
 
+    # Passive environmental event traces, never inputs to an agent policy.
+    fields_enabled: bool = False
+    field_decay: float = 0.02
+    field_diffusion: float = 0.2
+
     # Opt-in local decision model. False preserves the earlier experiment control.
     social_enabled: bool = False
     social_mutation_sigma: float = 0.06
@@ -69,6 +74,10 @@ class Config:
     min_trait_norm: float = 1e-12
 
     def __post_init__(self) -> None:
+        for name in ("field_decay", "field_diffusion"):
+            value = getattr(self, name)
+            if not isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"{name} must be finite and between 0 and 1")
         for name in ("perception_radius", "memory_capacity", "memory_duration"):
             value = getattr(self, name)
             if not isinstance(value, Integral) or value < 1:

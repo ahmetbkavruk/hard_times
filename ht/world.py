@@ -6,6 +6,7 @@ import numpy as np
 from .actions import Action, ActionKind
 from .agent import Agent
 from .config import Config
+from .fields import FieldSystem
 from .policies import Neighbor, NearbyBody, Observation, Policy, RuleBasedPolicy, TradeOffer
 from .social import Alignment, Carcass, Encounter, reflect_trait
 from .social_policy import DIRECTIONS, SocialPolicy
@@ -45,6 +46,7 @@ class World:
         self.record_actions = record_actions
         self.last_actions: Dict[int, Action] = {}
         self.last_recipe_uses: set[int] = set()
+        self.fields = FieldSystem(config.L, decay=config.field_decay, diffusion=config.field_diffusion) if config.fields_enabled else None
 
         self.capacity = self._make_capacities()
         self.resources = self.capacity.copy()
@@ -207,6 +209,8 @@ class World:
         previous = (agent.x, agent.y)
         agent.x = (agent.x + dx) % self.cfg.L
         agent.y = (agent.y + dy) % self.cfg.L
+        if self.fields is not None and previous != (agent.x, agent.y):
+            self.fields.deposit("movement", (agent.x, agent.y))
         agent.last_direction = (dx, dy)
         if self._occupancy is not None:
             self._occupancy[previous].discard(agent.id)
@@ -391,6 +395,8 @@ class World:
         damage = min(target.energy, self.cfg.attack_damage * (0.5 + agent.hA))
         agent.energy -= self.cfg.attack_cost
         target.energy -= damage
+        if self.fields is not None:
+            self.fields.deposit("violence", (target.x, target.y))
         self._remember(target, agent.id, harmed=True)
         killed = target.energy <= 0
         self.social_totals["attacks"] += 1
@@ -563,6 +569,9 @@ class World:
         c_donor.self_produced_inventory[1] -= q
         b_donor.received_inventory[1] += net
         c_donor.received_inventory[0] += net
+        if self.fields is not None:
+            self.fields.deposit("trade", (first.x, first.y), 0.5)
+            self.fields.deposit("trade", (second.x, second.y), 0.5)
 
         self.trades.append(
             {
@@ -611,6 +620,8 @@ class World:
             self.t += 1
             self._acting = False
             self.exchange()
+            if self.fields is not None:
+                self.fields.advance()
             self.record_metrics()
         finally:
             self._acting = False

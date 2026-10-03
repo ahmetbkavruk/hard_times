@@ -32,6 +32,48 @@ class TestLiveViewer(unittest.TestCase):
     def tearDown(self):
         plt.close("all")
 
+    def test_field_overlays_keys_and_restart_are_passive(self):
+        config = Config(L=5, initial_agents=12, social_enabled=True, fields_enabled=True)
+        viewer = LiveViewer(config, seed=11, paused=True, field_scale=2)
+        plain = World(config, seed=11)
+        for _ in range(3):
+            plain.step()
+            viewer.single_step()
+        before = viewer.world.fields.snapshot()
+        self.assertEqual(viewer.field_overlay, "movement")
+        for expected in ("trade", "violence", "none", "movement"):
+            viewer.figure.canvas.callbacks.process("key_press_event", KeyEvent("key_press_event", viewer.figure.canvas, key="f"))
+            self.assertEqual(viewer.field_overlay, expected)
+            self.assertEqual(viewer.field_image.get_visible(), expected != "none")
+            if expected != "none":
+                self.assertIn("2 events/cell", viewer.field_text.get_text())
+            self.assert_same_world(plain, viewer.world)
+            np.testing.assert_array_equal(viewer.world.fields.snapshot(), before)
+        viewer.reset()
+        self.assertEqual(viewer.world.fields.snapshot().sum(), 0)
+        self.assertEqual(len(viewer.world.fields.history), 1)
+        self.assert_same_world(viewer.world, World(config, seed=11))
+
+    def test_field_overlay_uses_fixed_scale_and_disabled_control_is_harmless(self):
+        viewer = LiveViewer(Config(L=4, initial_agents=1, fields_enabled=True), paused=True, field_scale=2)
+        viewer.world.fields.deposit("movement", (0, 0), 1)
+        viewer.world.fields.deposit("movement", (1, 0), 20)
+        viewer.world.fields.advance()
+        viewer.refresh()
+        alpha = viewer.field_image.get_array()[:, :, 3]
+        self.assertAlmostEqual(alpha[0, 0], 0.425)
+        self.assertAlmostEqual(alpha[0, 1], 0.85)
+        self.assertEqual(alpha[3, 3], 0)
+        disabled = LiveViewer(Config(L=4, initial_agents=1), paused=True)
+        disabled.toggle_field()
+        self.assertEqual(disabled.field_overlay, "none")
+        self.assertFalse(disabled.field_image.get_visible())
+        for value in (0, -1, np.nan, np.inf):
+            with self.assertRaises(ValueError):
+                LiveViewer(viewer.config, field_scale=value)
+        with self.assertRaises(ValueError):
+            LiveViewer(disabled.config, field_overlay="trade")
+
     def assert_same_world(self, left, right):
         np.testing.assert_array_equal(left.resources, right.resources)
         np.testing.assert_array_equal(left.capacity, right.capacity)
