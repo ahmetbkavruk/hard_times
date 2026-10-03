@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from math import ceil, sqrt
+from math import ceil, isfinite, sqrt
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.lines import Line2D
 from matplotlib.widgets import Button, Slider
 import numpy as np
 
 from .actions import ActionKind
 from .config import Config
+from .fields import FIELD_CHANNELS
 from .social import ALIGNMENT_COLORS, Alignment
 from .world import World
 
@@ -28,6 +29,7 @@ TEXT = "#e8edf2"
 MUTED = "#9aabbc"
 EATING = "#c9ff76"
 TRADING = "#f58be0"
+FIELD_COLORS = {"movement": "#63cfff", "trade": "#f58be0", "violence": "#ff625c"}
 RESOURCE_COLORS = LinearSegmentedColormap.from_list(
     "resource_amount", ["#151c22", "#29443e", "#527b62"]
 )
@@ -44,6 +46,7 @@ class LiveViewer:
         self, config: Config, seed: int = 7, *, speed: int = 10,
         steps: int | None = None, paused: bool = False,
         color_by: str | None = None,
+        field_overlay: str | None = None, field_scale: float = 5.0,
     ):
         if not 1 <= speed <= 60:
             raise ValueError("speed must be between 1 and 60 steps per second")
@@ -56,6 +59,14 @@ class LiveViewer:
         self.color_by = color_by or ("alignment" if config.social_enabled else "production")
         if self.color_by not in ("alignment", "production"):
             raise ValueError("color_by must be 'alignment' or 'production'")
+        self.field_overlay = field_overlay or ("movement" if config.fields_enabled else "none")
+        if self.field_overlay not in ("none", *FIELD_CHANNELS):
+            raise ValueError("unknown field overlay")
+        if not config.fields_enabled and self.field_overlay != "none":
+            raise ValueError("field overlays require --fields")
+        if not isfinite(field_scale) or field_scale <= 0:
+            raise ValueError("field scale must be finite and positive")
+        self.field_scale = field_scale
         self.world = World(config, seed=seed, record_actions=True)
         self.selected_agent = None
         self.selected_died_at = None
@@ -84,6 +95,8 @@ class LiveViewer:
             self.world.resources[0], origin="upper", interpolation="nearest",
             cmap=RESOURCE_COLORS, vmin=0, vmax=max(float(self.world.capacity.max()), 1e-12),
         )
+        self.field_image = self.grid.imshow(np.zeros((config.L, config.L, 4)), origin="upper", interpolation="nearest", zorder=1)
+        self.field_text = self.figure.text(0.045, 0.888, "", color=MUTED, fontsize=8.5)
         self.dots = self.grid.scatter(
             [], [], marker="s", c=[], cmap=AGENT_COLORS, vmin=0, vmax=1,
             edgecolors=BACKGROUND, linewidths=0.3, zorder=3,
@@ -154,11 +167,12 @@ class LiveViewer:
         self.figure.text(0.675, 0.164, "Blue arrow: flee   /   Pale triangle: ate remains", color=MUTED, fontsize=9)
         self.figure.text(0.675, 0.14, "Highlights: latest step. Small beige dots: remains.", color=MUTED, fontsize=8.5)
 
-        self.play_button = self._button([0.045, 0.06, 0.12, 0.05], "Pause", self.toggle_play)
-        self.step_button = self._button([0.175, 0.06, 0.12, 0.05], "Step", self.single_step)
-        self.reset_button = self._button([0.305, 0.06, 0.12, 0.05], "Restart seed", self.reset)
-        self.color_button = self._button([0.435, 0.06, 0.14, 0.05], "Colors", self.toggle_colors)
-        slider_axis = self.figure.add_axes([0.675, 0.078, 0.23, 0.015], facecolor=PANEL)
+        self.play_button = self._button([0.045, 0.06, 0.095, 0.05], "Pause", self.toggle_play)
+        self.step_button = self._button([0.15, 0.06, 0.08, 0.05], "Step", self.single_step)
+        self.reset_button = self._button([0.24, 0.06, 0.11, 0.05], "Restart seed", self.reset)
+        self.color_button = self._button([0.36, 0.06, 0.135, 0.05], "Colors", self.toggle_colors)
+        self.field_button = self._button([0.505, 0.06, 0.14, 0.05], "Field", self.toggle_field)
+        slider_axis = self.figure.add_axes([0.78, 0.078, 0.125, 0.015], facecolor=PANEL)
         self.speed_slider = Slider(
             slider_axis, "Steps / sec", 1, 60, valinit=speed, valstep=1,
             valfmt="%d", color="#71b9b1", track_color="#34424f",
@@ -167,7 +181,7 @@ class LiveViewer:
         self.speed_slider.valtext.set_color(TEXT)
         self.figure.text(
             0.045, 0.023,
-            "SPACE  play / pause     N  one step     R  restart     C  change colors     Click a cell to inspect; click again to cycle agents.",
+            "SPACE  play / pause     N  one step     R  restart     C  colors     F  field overlay     Click a cell to inspect; click again to cycle agents.",
             color=MUTED, fontsize=8.5,
         )
 
@@ -204,6 +218,12 @@ class LiveViewer:
 
     def toggle_colors(self, event=None):
         self.color_by = "production" if self.color_by == "alignment" else "alignment"
+        self.refresh()
+
+    def toggle_field(self, event=None):
+        if self.world.fields is not None:
+            choices = ("none", *FIELD_CHANNELS)
+            self.field_overlay = choices[(choices.index(self.field_overlay) + 1) % len(choices)]
         self.refresh()
 
     def reset(self, event=None):
@@ -262,6 +282,7 @@ class LiveViewer:
         colors = RESOURCE_COLORS(intensity)
         colors[~world.renewable_mask] = FINITE_RESOURCE_COLORS(intensity[~world.renewable_mask])
         self.resource_image.set_data(colors)
+        self._refresh_field()
         resource_state = world.resource_metrics()
         self.resource_text.set_text(
             f"A remaining: {resource_state['renewable_A_remaining']:,.1f} renewable"
@@ -347,6 +368,24 @@ class LiveViewer:
         self._inspect_agent()
         self.figure.canvas.draw_idle()
 
+    def _refresh_field(self):
+        """Use a fixed display scale; switching layers never updates the fields."""
+        enabled = self.world.fields is not None
+        visible = enabled and self.field_overlay != "none"
+        self.field_image.set_visible(visible)
+        self.field_button.label.set_text(f"Field: {self.field_overlay}" if enabled else "Fields disabled")
+        if not visible:
+            self.field_text.set_text("Passive fields recorded; F to show an overlay." if enabled else "Passive fields off; start with --fields to record event traces.")
+            self.field_text.set_color(MUTED)
+            return
+        values = self.world.fields.layer(self.field_overlay)
+        colors = np.empty((*values.shape, 4))
+        colors[:] = to_rgba(FIELD_COLORS[self.field_overlay])
+        colors[:, :, 3] = 0.85 * np.clip(values / self.field_scale, 0, 1)
+        self.field_image.set_data(colors)
+        self.field_text.set_color(FIELD_COLORS[self.field_overlay])
+        self.field_text.set_text(f"{self.field_overlay.title()} trace | full tint at {self.field_scale:g} events/cell | total {values.sum():.1f} | agents cannot sense it")
+
     def _inspect_agent(self):
         agent = self.selected_agent
         if agent is None:
@@ -417,7 +456,7 @@ class LiveViewer:
         self.refresh()
 
     def on_key(self, event):
-        callbacks = {" ": self.toggle_play, "n": self.single_step, "r": self.reset, "c": self.toggle_colors}
+        callbacks = {" ": self.toggle_play, "n": self.single_step, "r": self.reset, "c": self.toggle_colors, "f": self.toggle_field}
         callback = callbacks.get(event.key)
         if callback:
             callback()
@@ -450,6 +489,11 @@ def main(argv=None):
     parser.add_argument("--speed", type=int, choices=range(1, 61), default=10, metavar="1..60", help="target steps per second")
     parser.add_argument("--paused", action="store_true", help="start paused at step zero")
     parser.add_argument("--social", action="store_true", help="enable local social decisions, combat and predation")
+    parser.add_argument("--fields", action="store_true", help="record passive local event traces (agents cannot sense them)")
+    parser.add_argument("--field-decay", type=float, default=0.02, help="fraction of old trace lost per step (0 to 1)")
+    parser.add_argument("--field-diffusion", type=float, default=0.2, help="fraction mixed with cardinal neighbors per step (0 to 1)")
+    parser.add_argument("--field-overlay", choices=("none", *FIELD_CHANNELS), help="initial overlay; requires --fields (default: movement)")
+    parser.add_argument("--field-scale", type=float, default=5.0, help="fixed event weight per cell at full overlay tint")
     parser.add_argument("--color-by", choices=("alignment", "production"), help="initial agent colors (default: alignment with --social)")
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--finite-fraction", type=float, default=0.0, help="fraction of cells with nonrenewable A (0 to 1)")
@@ -473,11 +517,11 @@ def main(argv=None):
             trade_enabled=args.trade, trade_matching=args.trade_matching,
             deficit_move_probability=args.deficit_move_probability,
             social_enabled=args.social,
+            fields_enabled=args.fields, field_decay=args.field_decay, field_diffusion=args.field_diffusion,
         )
+        viewer = LiveViewer(config, seed=args.seed, speed=args.speed, steps=args.steps, paused=args.paused, color_by=args.color_by, field_overlay=args.field_overlay, field_scale=args.field_scale)
     except ValueError as error:
         parser.error(str(error))
-    viewer = LiveViewer(config, seed=args.seed, speed=args.speed, steps=args.steps, paused=args.paused,
-                        color_by=args.color_by)
     try:
         viewer.show()
     except RuntimeError as error:

@@ -2,6 +2,27 @@
 
 A minimal evolutionary ecology for studying whether specialization and interdependence can emerge without a global fitness function.
 
+## Persistent local event traces
+
+Record and watch passive movement, trade and violence traces on top of the
+social model:
+
+```bash
+python run_viewer.py --social --fields --seed 7 --steps 600 --finite-fraction 0.5
+```
+
+Press **F** or click **Field** to cycle the overlays. Traces persist, decay and
+spread only to the four neighboring cells; agents cannot sense them. Recording
+does not alter the seeded trajectory. Use `--field-diffusion 0` for traces that
+stay at the event locations, and `--field-decay 0` for cumulative counts.
+`--field-scale 5` sets the fixed display saturation in event units per cell.
+
+The comparison runner also accepts `--fields`, `--field-decay` and
+`--field-diffusion`, exporting `field_history.csv` and `field_map.json` in each
+run directory. Recording works with either policy and is off by default.
+See [FIELD_MODEL.md](FIELD_MODEL.md) for event definitions, timing, accounting,
+measurements and interpretation limits.
+
 ## Watch the live world
 
 From a local desktop terminal in the repository directory:
